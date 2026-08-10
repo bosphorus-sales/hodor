@@ -216,6 +216,13 @@
         <h3>سجل اليوم</h3>
         <div id="todayLog" class="muted">لا يوجد تسجيل بعد اليوم</div>
       </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <h3 style="margin:0;">وضعي هذا الأسبوع</h3>
+          <span class="muted" id="empWeekRange" style="font-size:12px;"></span>
+        </div>
+        <div id="empWeekSummary"><div class="spinner"></div></div>
+      </div>
       <button class="link-btn" id="btnEmpLogout">تسجيل خروج</button>
     </main>
   </div>
@@ -373,6 +380,15 @@ function haversine(lat1,lon1,lat2,lon2){
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 function money(n){ return Math.round(n).toLocaleString("en-US"); }
+function deductionForMinutes(tiers, minutes){
+  if(!tiers || tiers.length===0 || minutes<=0) return 0;
+  const sorted = [...tiers].sort((a,b)=>a.minutes-b.minutes);
+  let applied = 0;
+  for(const t of sorted){
+    if(minutes >= t.minutes) applied = t.amount;
+  }
+  return applied;
+}
 
 /* ---------------- INIT / CONFIG ---------------- */
 async function loadConfig(){
@@ -450,7 +466,32 @@ async function enterEmployee(emp){
   empClockInterval = setInterval(updateClock, 1000*20);
 
   await refreshEmployeeStatus();
+  await renderEmployeeWeekSummary();
   locateAndPrepare();
+}
+
+async function renderEmployeeWeekSummary(){
+  const ws = getSaturdayOfCurrentWeek(new Date());
+  $("#empWeekRange").textContent = `${fmtDateShort(ws)} — ${fmtDateShort(addDays(ws,6))}`;
+  const wrap = $("#empWeekSummary");
+  wrap.innerHTML = `<div class="spinner"></div>`;
+  const b = await computeWeeklyBreakdown(currentEmployee, ws);
+  const dayRows = b.dayDetails.map(d=>{
+    if(d.type==="absent") return `<div class="employee-row"><span>${d.date} — غياب</span><span class="pill pill-red">${money(d.amount)} د.ع</span></div>`;
+    const parts=[];
+    if(d.lateMin>0) parts.push(`تأخير ${d.lateMin}د`);
+    if(d.earlyMin>0) parts.push(`انصراف مبكر ${d.earlyMin}د`);
+    return `<div class="employee-row"><span>${d.date} — ${parts.join("، ")}</span><span class="pill pill-red">${money(d.amount)} د.ع</span></div>`;
+  }).join("");
+  const manualRows = b.manualEntries.map(m=>`<div class="employee-row"><span>${m.date} — ${m.reason||"استقطاع"}</span><span class="pill pill-red">${money(m.amount)} د.ع</span></div>`).join("");
+  wrap.innerHTML = `
+    <div class="employee-row"><span class="muted">الراتب الأساسي</span><b>${money(b.weeklySalary)} د.ع</b></div>
+    <div class="employee-row"><span class="muted">مجموع استقطاع الحضور</span><b style="color:var(--red);">${money(b.autoDeduction)} د.ع</b></div>
+    <div class="employee-row"><span class="muted">مجموع استقطاع يدوي</span><b style="color:var(--red);">${money(b.manualDeduction)} د.ع</b></div>
+    ${dayRows||manualRows ? `<div class="stitch"></div>${dayRows}${manualRows}` : ""}
+    <div class="stitch"></div>
+    <div class="employee-row" style="border:none;"><span style="font-weight:700;">الصافي المتبقي</span><span class="big-num" style="font-size:20px;color:var(--green);">${money(b.net)} د.ع</span></div>
+  `;
 }
 function updateClock(){
   const now = new Date();
@@ -566,6 +607,7 @@ async function handleCheckAction(){
     showToast("تم تسجيل الانصراف ✅");
   }
   await refreshEmployeeStatus();
+  await renderEmployeeWeekSummary();
 }
 
 /* ---------------- ADMIN SHELL ---------------- */
@@ -662,6 +704,11 @@ function openEmployeeModal(empId){
           ${DAY_SHORT.map((d,i)=>`<div class="chip-check ${workDays.includes(i)?"on":""}" data-day="${i}">${d}</div>`).join("")}
         </div>
       </div>
+      <div class="field">
+        <label>شرائح استقطاع التأخير (تنطبق أيضاً على الانصراف المبكر)</label>
+        <div id="mEmpTiers"></div>
+        <button type="button" class="link-btn" id="btnAddTier" style="margin-top:6px;">+ إضافة شريحة</button>
+      </div>
       ${emp?`<div class="field"><label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="mEmpActive" style="width:auto;" ${emp.active!==false?"checked":""}> الموظف نشط</label></div>`:""}
       <button class="btn btn-primary" id="btnSaveEmp" style="margin-top:6px;">حفظ</button>
       ${emp?`<button class="btn btn-outline" id="btnDeleteEmp" style="margin-top:10px;color:var(--red);border-color:var(--red);">حذف الموظف</button>`:""}
@@ -675,6 +722,31 @@ function openEmployeeModal(empId){
   if(emp){
     $("#btnDeleteEmp").addEventListener("click", ()=> deleteEmployee(empId));
   }
+  const initialTiers = (emp?.lateTiers && emp.lateTiers.length) ? emp.lateTiers : [{minutes:15, amount:5000},{minutes:60, amount:10000}];
+  renderTierRows(initialTiers);
+  $("#btnAddTier").addEventListener("click", ()=>{
+    renderTierRows([...readTierRows(), {minutes:"", amount:""}]);
+  });
+}
+function renderTierRows(tiers){
+  const wrap = $("#mEmpTiers");
+  wrap.innerHTML = tiers.map((t,i)=>`
+    <div class="row" style="align-items:center;margin-bottom:8px;" data-tier-row="${i}">
+      <div style="flex:1;"><input type="number" class="tier-min" placeholder="دقائق التأخير" value="${t.minutes??""}"></div>
+      <div style="flex:1;"><input type="number" class="tier-amt" placeholder="مبلغ الاستقطاع" value="${t.amount??""}"></div>
+      <button type="button" class="icon-btn" data-remove-tier="${i}" style="flex:0 0 auto;">🗑️</button>
+    </div>`).join("") || `<div class="muted" style="font-size:12px;">لا توجد شرائح — سيُستخدم استقطاع الغياب الكامل لليوم فقط</div>`;
+  $all("[data-remove-tier]").forEach(b=> b.addEventListener("click", ()=>{
+    const rows = readTierRows();
+    rows.splice(Number(b.dataset.removeTier),1);
+    renderTierRows(rows);
+  }));
+}
+function readTierRows(){
+  return $all("#mEmpTiers [data-tier-row]").map(row=>({
+    minutes: Number(row.querySelector(".tier-min").value)||0,
+    amount: Number(row.querySelector(".tier-amt").value)||0
+  }));
 }
 function closeModal(){ $("#modalRoot").innerHTML = ""; }
 
@@ -686,11 +758,12 @@ async function saveEmployee(empId){
   const workStart = $("#mEmpStart").value;
   const workEnd = $("#mEmpEnd").value;
   const workDays = $all("#mEmpDays .chip-check.on").map(c=>Number(c.dataset.day));
+  const lateTiers = readTierRows().filter(t=>t.minutes>0).sort((a,b)=>a.minutes-b.minutes);
   if(!name || code.length!==4){ showToast("تأكد من الاسم والرمز (4 أرقام)"); return; }
   const dupCode = employeesCache.find(e=> e.code===code && e.id!==empId);
   if(dupCode){ showToast("هذا الرمز مستخدم لموظف آخر"); return; }
 
-  const data = { name, code, weeklySalary:salary, storeId, workStart, workEnd, workDays };
+  const data = { name, code, weeklySalary:salary, storeId, workStart, workEnd, workDays, lateTiers };
   const activeEl = $("#mEmpActive");
   if(activeEl) data.active = activeEl.checked;
 
@@ -848,6 +921,52 @@ async function saveDeduction(){
   renderDeductionList();
 }
 
+/* ---- Shared weekly breakdown calc (used by payroll tab + employee self-view) ---- */
+async function computeWeeklyBreakdown(emp, weekStartDate){
+  const weekDates = Array.from({length:7}, (_,i)=> addDays(weekStartDate,i));
+  const weekStartStr = dateStr(weekStartDate);
+  const weekEndStr = dateStr(addDays(weekStartDate,6));
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  const workDays = emp.workDays || [];
+  const startMin = minutesFromHHMM(emp.workStart);
+  const endMin = minutesFromHHMM(emp.workEnd);
+  const dailyHours = (startMin!=null && endMin!=null) ? Math.max(0,(endMin-startMin)/60) : 0;
+  const scheduledDaysInWeek = weekDates.filter(d=> workDays.includes(d.getDay()));
+  const weeklyHours = dailyHours * scheduledDaysInWeek.length;
+  const hourlyRate = weeklyHours>0 ? (emp.weeklySalary||0)/weeklyHours : 0;
+
+  const attSnap = await getDocs(query(collection(db,COL_ATT), where("employeeId","==",emp.id), where("date",">=",weekStartStr), where("date","<=",weekEndStr)));
+  const attByDate = {};
+  attSnap.docs.forEach(d=> attByDate[d.data().date] = d.data());
+
+  const dedSnap = await getDocs(query(collection(db,COL_DED), where("employeeId","==",emp.id), where("date",">=",weekStartStr), where("date","<=",weekEndStr)));
+  const manualEntries = dedSnap.docs.map(d=>d.data());
+  const manualDeduction = manualEntries.reduce((s,v)=>s+v.amount,0);
+
+  let autoDeduction = 0, absentDays = 0, lateDays = 0;
+  const dayDetails = [];
+  scheduledDaysInWeek.forEach(d=>{
+    if(d > today) return; // don't judge future days
+    const rec = attByDate[dateStr(d)];
+    if(!rec || !rec.checkInTime){
+      const amt = dailyHours * hourlyRate;
+      autoDeduction += amt;
+      absentDays++;
+      dayDetails.push({ date:dateStr(d), type:"absent", amount:amt });
+    } else {
+      const lateMin = rec.lateMinutes||0;
+      const earlyMin = rec.earlyMinutes||0;
+      const amt = deductionForMinutes(emp.lateTiers, lateMin) + deductionForMinutes(emp.lateTiers, earlyMin);
+      if(amt>0) lateDays++;
+      autoDeduction += amt;
+      if(amt>0) dayDetails.push({ date:dateStr(d), type:"late", lateMin, earlyMin, amount:amt });
+    }
+  });
+  const net = (emp.weeklySalary||0) - autoDeduction - manualDeduction;
+  return { autoDeduction, manualDeduction, manualEntries, absentDays, lateDays, dayDetails, net, weeklySalary: emp.weeklySalary||0 };
+}
+
 /* ---- Payroll tab ---- */
 function renderWeekLabel(){
   const end = addDays(weekStart,6);
@@ -859,71 +978,27 @@ async function renderPayroll(){
   wrap.innerHTML = `<div class="spinner"></div>`;
   if(employeesCache.length===0){ wrap.innerHTML = `<div class="empty-state">ما عندك موظفين مضافين بعد</div>`; return; }
 
-  const weekDates = Array.from({length:7}, (_,i)=> addDays(weekStart,i));
-  const weekEndStr = dateStr(addDays(weekStart,6));
-  const weekStartStr = dateStr(weekStart);
-  const today = new Date(); today.setHours(0,0,0,0);
-
-  const dedSnap = await getDocs(query(collection(db,COL_DED), where("date",">=",weekStartStr), where("date","<=",weekEndStr)));
-  const deductionsByEmp = {};
-  dedSnap.docs.forEach(d=>{
-    const v = d.data();
-    deductionsByEmp[v.employeeId] = (deductionsByEmp[v.employeeId]||0) + v.amount;
-  });
-
-  const attSnap = await getDocs(query(collection(db,COL_ATT), where("date",">=",weekStartStr), where("date","<=",weekEndStr)));
-  const attByEmpDate = {};
-  attSnap.docs.forEach(d=>{
-    const v = d.data();
-    attByEmpDate[`${v.employeeId}_${v.date}`] = v;
-  });
-
   let rows = "";
   for(const e of employeesCache.filter(e=>e.active!==false)){
-    const workDays = e.workDays || [];
-    const startMin = minutesFromHHMM(e.workStart);
-    const endMin = minutesFromHHMM(e.workEnd);
-    const dailyHours = (startMin!=null && endMin!=null) ? Math.max(0,(endMin-startMin)/60) : 0;
-    const scheduledDaysInWeek = weekDates.filter(d=> workDays.includes(d.getDay()));
-    const weeklyHours = dailyHours * scheduledDaysInWeek.length;
-    const hourlyRate = weeklyHours>0 ? (e.weeklySalary||0)/weeklyHours : 0;
-
-    let autoDeduction = 0;
-    let absentDays = 0, lateDays = 0;
-    scheduledDaysInWeek.forEach(d=>{
-      if(d > today) return; // don't judge future days
-      const rec = attByEmpDate[`${e.id}_${dateStr(d)}`];
-      if(!rec || !rec.checkInTime){
-        autoDeduction += dailyHours * hourlyRate;
-        absentDays++;
-      } else {
-        const lateMin = rec.lateMinutes||0;
-        const earlyMin = rec.earlyMinutes||0;
-        if(lateMin>0 || earlyMin>0) lateDays++;
-        autoDeduction += ((lateMin+earlyMin)/60) * hourlyRate;
-      }
-    });
-    const manualDeduction = deductionsByEmp[e.id]||0;
-    const net = (e.weeklySalary||0) - autoDeduction - manualDeduction;
-
+    const b = await computeWeeklyBreakdown(e, weekStart);
     rows += `<div class="card" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div style="font-weight:800;">${e.name}</div>
-        <div class="pill pill-gold">${money(e.weeklySalary||0)} د.ع أساسي</div>
+        <div class="pill pill-gold">${money(b.weeklySalary)} د.ع أساسي</div>
       </div>
       <table>
         <tr><th>غياب</th><th>تأخير/مبكر</th><th>استقطاع تلقائي</th><th>استقطاع يدوي</th></tr>
         <tr>
-          <td>${absentDays} يوم</td>
-          <td>${lateDays} يوم</td>
-          <td>${money(autoDeduction)}</td>
-          <td>${money(manualDeduction)}</td>
+          <td>${b.absentDays} يوم</td>
+          <td>${b.lateDays} يوم</td>
+          <td>${money(b.autoDeduction)}</td>
+          <td>${money(b.manualDeduction)}</td>
         </tr>
       </table>
       <div class="stitch"></div>
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <span class="muted">الصافي المستحق</span>
-        <span class="big-num" style="font-size:22px;color:var(--green);">${money(net)} د.ع</span>
+        <span class="big-num" style="font-size:22px;color:var(--green);">${money(b.net)} د.ع</span>
       </div>
     </div>`;
   }
