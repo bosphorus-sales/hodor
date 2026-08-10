@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>حضور البسفور</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800&family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#FAF6F4;
+    --surface:#FFFFFF;
+    --ink:#3A2E35;
+    --muted:#8B7A80;
+    --line:#EAE0DD;
+    --rose:#9B4358;
+    --rose-dark:#7A2F41;
+    --rose-tint:#F3E3E6;
+    --gold:#C08A3E;
+    --gold-tint:#F6ECD9;
+    --green:#4C7A5E;
+    --green-tint:#E4EEE8;
+    --red:#B0413E;
+    --red-tint:#F7E4E3;
+    --radius:16px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Tajawal',sans-serif;
+    min-height:100vh;
+    -webkit-tap-highlight-color:transparent;
+  }
+  h1,h2,h3,.display{font-family:'Cairo',sans-serif;}
+  .app{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;background:var(--bg);position:relative;}
+  header.top{
+    padding:22px 20px 18px;
+    background:linear-gradient(160deg,var(--rose) 0%, var(--rose-dark) 100%);
+    color:#fff;
+    position:relative;
+    overflow:hidden;
+  }
+  header.top::after{
+    content:"";
+    position:absolute;
+    left:0;right:0;bottom:0;
+    height:10px;
+    background-image:repeating-linear-gradient(90deg,transparent,transparent 10px,rgba(255,255,255,.35) 10px,rgba(255,255,255,.35) 14px);
+    opacity:.6;
+  }
+  header.top .brand{font-family:'Cairo',sans-serif;font-weight:800;font-size:22px;letter-spacing:.3px;}
+  header.top .sub{font-size:13px;opacity:.85;margin-top:2px;}
+  .stitch{
+    height:1px;
+    margin:18px 0;
+    background-image:repeating-linear-gradient(90deg,var(--line),var(--line) 8px,transparent 8px,transparent 14px);
+  }
+  main{flex:1;padding:20px;padding-bottom:100px;}
+  .card{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    padding:18px;
+    margin-bottom:16px;
+  }
+  .card h3{margin:0 0 12px;font-size:16px;color:var(--rose-dark);}
+  .btn{
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    width:100%;padding:15px;border-radius:12px;border:none;
+    font-family:'Tajawal',sans-serif;font-weight:700;font-size:16px;
+    cursor:pointer;transition:transform .08s ease, opacity .15s ease;
+  }
+  .btn:active{transform:scale(.97);}
+  .btn-primary{background:var(--rose);color:#fff;}
+  .btn-primary:hover{background:var(--rose-dark);}
+  .btn-outline{background:transparent;color:var(--rose);border:1.5px solid var(--rose);}
+  .btn-gold{background:var(--gold);color:#fff;}
+  .btn-green{background:var(--green);color:#fff;}
+  .btn-red{background:var(--red);color:#fff;}
+  .btn-sm{padding:9px 14px;font-size:13px;width:auto;border-radius:9px;}
+  .btn:disabled{opacity:.5;cursor:not-allowed;}
+  input,select{
+    width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:10px;
+    font-family:'Tajawal',sans-serif;font-size:15px;background:#fff;color:var(--ink);
+  }
+  input:focus,select:focus{outline:none;border-color:var(--rose);}
+  label{font-size:13px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500;}
+  .field{margin-bottom:14px;}
+  .row{display:flex;gap:10px;}
+  .row>*{flex:1;}
+  .pill{display:inline-flex;align-items:center;padding:4px 11px;border-radius:20px;font-size:12px;font-weight:700;}
+  .pill-green{background:var(--green-tint);color:var(--green);}
+  .pill-red{background:var(--red-tint);color:var(--red);}
+  .pill-gold{background:var(--gold-tint);color:var(--gold);}
+  .pill-muted{background:var(--line);color:var(--muted);}
+  .hidden{display:none !important;}
+  /* PIN pad */
+  .pin-dots{display:flex;justify-content:center;gap:14px;margin:26px 0;}
+  .pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--rose);background:transparent;transition:background .15s;}
+  .pin-dot.filled{background:var(--rose);}
+  .pin-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:300px;margin:0 auto;}
+  .pin-key{
+    aspect-ratio:1;border-radius:50%;border:1.5px solid var(--line);background:#fff;
+    font-family:'Cairo',sans-serif;font-size:22px;font-weight:700;color:var(--ink);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+  }
+  .pin-key:active{background:var(--rose-tint);}
+  .pin-key.wide{font-size:14px;color:var(--muted);border:none;background:none;font-family:'Tajawal',sans-serif;}
+  .center{text-align:center;}
+  .muted{color:var(--muted);font-size:13px;}
+  .big-num{font-family:'Cairo',sans-serif;font-weight:800;font-size:30px;}
+  .employee-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line);}
+  .employee-row:last-child{border-bottom:none;}
+  .avatar{
+    width:40px;height:40px;border-radius:50%;background:var(--rose-tint);color:var(--rose-dark);
+    display:flex;align-items:center;justify-content:center;font-weight:800;font-family:'Cairo',sans-serif;flex-shrink:0;
+  }
+  .name-block{display:flex;align-items:center;gap:10px;}
+  .bottom-nav{
+    position:fixed;bottom:0;left:50%;transform:translateX(-50%);
+    width:100%;max-width:480px;background:#fff;border-top:1px solid var(--line);
+    display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom));z-index:50;
+  }
+  .nav-btn{
+    flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
+    padding:8px 2px;background:none;border:none;cursor:pointer;color:var(--muted);
+    font-family:'Tajawal',sans-serif;font-size:10.5px;font-weight:700;
+  }
+  .nav-btn.active{color:var(--rose);}
+  .nav-icon{font-size:19px;line-height:1;}
+  .modal-bg{
+    position:fixed;inset:0;background:rgba(58,46,53,.5);z-index:100;
+    display:flex;align-items:flex-end;justify-content:center;
+  }
+  .modal{
+    background:#fff;width:100%;max-width:480px;border-radius:20px 20px 0 0;
+    padding:22px 20px calc(22px + env(safe-area-inset-bottom));max-height:88vh;overflow-y:auto;
+  }
+  .modal-handle{width:40px;height:4px;background:var(--line);border-radius:2px;margin:0 auto 16px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{padding:8px 6px;text-align:center;border-bottom:1px solid var(--line);}
+  th{color:var(--muted);font-weight:700;font-size:12px;}
+  .toast{
+    position:fixed;bottom:90px;left:50%;transform:translateX(-50%);
+    background:var(--ink);color:#fff;padding:12px 22px;border-radius:30px;
+    font-size:14px;font-weight:600;z-index:200;box-shadow:0 6px 20px rgba(0,0,0,.2);
+    opacity:0;transition:opacity .25s ease;pointer-events:none;
+  }
+  .toast.show{opacity:1;}
+  .icon-btn{background:none;border:none;font-size:18px;cursor:pointer;color:var(--muted);padding:6px;}
+  .empty-state{text-align:center;padding:40px 20px;color:var(--muted);}
+  .chip-check{
+    display:inline-flex;align-items:center;justify-content:center;
+    padding:10px 4px;border:1.5px solid var(--line);border-radius:10px;font-size:12px;font-weight:700;
+    cursor:pointer;color:var(--muted);
+  }
+  .chip-check.on{background:var(--rose);border-color:var(--rose);color:#fff;}
+  .days-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;}
+  .link-btn{background:none;border:none;color:var(--rose);font-weight:700;font-size:13px;cursor:pointer;font-family:'Tajawal',sans-serif;}
+  .spinner{
+    width:34px;height:34px;border:3px solid var(--rose-tint);border-top-color:var(--rose);
+    border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ===================== SCREEN: PIN LOGIN ===================== -->
+  <div id="screen-login">
+    <header class="top">
+      <div class="brand">حضور البسفور</div>
+      <div class="sub">أدخل رمزك الخاص لتسجيل الحضور</div>
+    </header>
+    <main>
+      <div class="pin-dots" id="pinDots">
+        <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+      </div>
+      <div id="loginMsg" class="center muted" style="min-height:20px;margin-bottom:6px;"></div>
+      <div class="pin-pad" id="pinPad">
+        <button class="pin-key" data-k="1">1</button>
+        <button class="pin-key" data-k="2">2</button>
+        <button class="pin-key" data-k="3">3</button>
+        <button class="pin-key" data-k="4">4</button>
+        <button class="pin-key" data-k="5">5</button>
+        <button class="pin-key" data-k="6">6</button>
+        <button class="pin-key" data-k="7">7</button>
+        <button class="pin-key" data-k="8">8</button>
+        <button class="pin-key" data-k="9">9</button>
+        <div></div>
+        <button class="pin-key" data-k="0">0</button>
+        <button class="pin-key wide" id="btnBackspace">⌫</button>
+      </div>
+    </main>
+  </div>
+
+  <!-- ===================== SCREEN: EMPLOYEE CHECK-IN ===================== -->
+  <div id="screen-employee" class="hidden">
+    <header class="top">
+      <div class="brand" id="empName">—</div>
+      <div class="sub" id="empSub">—</div>
+    </header>
+    <main>
+      <div class="card center">
+        <div class="muted" id="nowDate">—</div>
+        <div class="big-num" id="nowTime" style="margin:4px 0 14px;">—:—</div>
+        <div id="empStatusPill"></div>
+        <div class="stitch"></div>
+        <div id="gpsStatus" class="muted" style="margin-bottom:14px;">جارِ تحديد الموقع...</div>
+        <button class="btn btn-primary" id="btnCheckAction" disabled>...</button>
+      </div>
+      <div class="card">
+        <h3>سجل اليوم</h3>
+        <div id="todayLog" class="muted">لا يوجد تسجيل بعد اليوم</div>
+      </div>
+      <button class="link-btn" id="btnEmpLogout">تسجيل خروج</button>
+    </main>
+  </div>
+
+  <!-- ===================== SCREEN: ADMIN ===================== -->
+  <div id="screen-admin" class="hidden">
+    <header class="top">
+      <div class="brand">إدارة الحضور</div>
+      <div class="sub">البسفور</div>
+    </header>
+    <main>
+
+      <!-- TAB: overview -->
+      <div id="tab-overview" class="tab-panel">
+        <div class="card">
+          <h3>اليوم — <span id="ovToday"></span></h3>
+          <div id="ovList"><div class="spinner"></div></div>
+        </div>
+      </div>
+
+      <!-- TAB: employees -->
+      <div id="tab-employees" class="tab-panel hidden">
+        <button class="btn btn-primary" id="btnAddEmployee" style="margin-bottom:14px;">+ إضافة موظف جديد</button>
+        <div class="card">
+          <div id="empList"><div class="spinner"></div></div>
+        </div>
+      </div>
+
+      <!-- TAB: stores -->
+      <div id="tab-stores" class="tab-panel hidden">
+        <button class="btn btn-primary" id="btnAddStore" style="margin-bottom:14px;">+ إضافة فرع</button>
+        <div class="card">
+          <div id="storeList"><div class="spinner"></div></div>
+        </div>
+      </div>
+
+      <!-- TAB: deductions -->
+      <div id="tab-deductions" class="tab-panel hidden">
+        <button class="btn btn-primary" id="btnAddDeduction" style="margin-bottom:14px;">+ إضافة استقطاع يدوي</button>
+        <div class="card">
+          <div id="dedList"><div class="spinner"></div></div>
+        </div>
+      </div>
+
+      <!-- TAB: payroll -->
+      <div id="tab-payroll" class="tab-panel hidden">
+        <div class="card">
+          <h3>الأسبوع</h3>
+          <div class="row" style="align-items:center;">
+            <button class="btn btn-outline btn-sm" id="btnWeekPrev">‹ السابق</button>
+            <div class="center" style="flex:2;">
+              <div style="font-weight:700;font-size:13px;" id="weekRangeLabel">—</div>
+            </div>
+            <button class="btn btn-outline btn-sm" id="btnWeekNext">التالي ›</button>
+          </div>
+        </div>
+        <div class="card">
+          <div id="payrollList"><div class="spinner"></div></div>
+        </div>
+      </div>
+
+      <!-- TAB: log -->
+      <div id="tab-log" class="tab-panel hidden">
+        <div class="card">
+          <div id="logList"><div class="spinner"></div></div>
+        </div>
+      </div>
+
+    </main>
+
+    <nav class="bottom-nav" id="adminNav">
+      <button class="nav-btn active" data-tab="overview"><span class="nav-icon">🏠</span>اليوم</button>
+      <button class="nav-btn" data-tab="employees"><span class="nav-icon">👥</span>الموظفين</button>
+      <button class="nav-btn" data-tab="stores"><span class="nav-icon">📍</span>الفروع</button>
+      <button class="nav-btn" data-tab="deductions"><span class="nav-icon">➖</span>استقطاع</button>
+      <button class="nav-btn" data-tab="payroll"><span class="nav-icon">💰</span>الرواتب</button>
+      <button class="nav-btn" data-tab="log"><span class="nav-icon">📋</span>السجل</button>
+    </nav>
+    <button class="link-btn" id="btnAdminLogout" style="position:fixed;top:16px;left:16px;color:#fff;z-index:60;">خروج</button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<!-- ===================== MODAL ROOT ===================== -->
+<div id="modalRoot"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getFirestore, collection, doc, getDocs, getDoc, addDoc, updateDoc, deleteDoc,
+  setDoc, query, where, orderBy, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAsllnjBZO4K9MyJNiTFoQJSfKtycQHMtU",
+  authDomain: "bosphorus-76067.firebaseapp.com",
+  projectId: "bosphorus-76067",
+  storageBucket: "bosphorus-76067.firebasestorage.app",
+  messagingSenderId: "678947739557",
+  appId: "1:678947739557:web:f3d70cfc44d862ddf53a4c",
+  measurementId: "G-87J6WZ2YJ7"
+};
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// Collection names — kept separate from the main sales system collections.
+const COL_EMP = "hr_employees";
+const COL_STORE = "hr_stores";
+const COL_ATT = "hr_attendance";
+const COL_DED = "hr_deductions";
+const COL_CFG = "hr_config";
+
+const DAY_NAMES = ["الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
+const DAY_SHORT = ["ح","ن","ث","ر","خ","ج","س"];
+
+let ADMIN_PIN = "9999"; // default, overridable via hr_config/settings.adminPin
+let employeesCache = [];
+let storesCache = [];
+let currentEmployee = null;
+let pinBuffer = "";
+let weekStart = getSaturdayOfCurrentWeek(new Date());
+
+function $(sel){ return document.querySelector(sel); }
+function $all(sel){ return Array.from(document.querySelectorAll(sel)); }
+function showToast(msg){
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(()=>t.classList.remove("show"), 2200);
+}
+function pad2(n){ return String(n).padStart(2,"0"); }
+function dateStr(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+function timeStr(d){ return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+function minutesFromHHMM(hhmm){
+  if(!hhmm) return null;
+  const [h,m] = hhmm.split(":").map(Number);
+  return h*60+m;
+}
+function getSaturdayOfCurrentWeek(d){
+  const date = new Date(d);
+  date.setHours(0,0,0,0);
+  const day = date.getDay(); // 0=Sun..6=Sat
+  const diff = (day + 1) % 7; // days since last Saturday
+  date.setDate(date.getDate() - diff);
+  return date;
+}
+function addDays(d,n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function fmtDateShort(d){ return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)}`; }
+function haversine(lat1,lon1,lat2,lon2){
+  const R=6371000;
+  const toRad = x=>x*Math.PI/180;
+  const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function money(n){ return Math.round(n).toLocaleString("en-US"); }
+
+/* ---------------- INIT / CONFIG ---------------- */
+async function loadConfig(){
+  try{
+    const ref = doc(db, COL_CFG, "settings");
+    const snap = await getDoc(ref);
+    if(snap.exists() && snap.data().adminPin){
+      ADMIN_PIN = snap.data().adminPin;
+    } else {
+      await setDoc(ref, { adminPin: ADMIN_PIN }, { merge:true });
+    }
+  }catch(e){ console.error("config load failed", e); }
+}
+
+async function loadEmployees(){
+  const snap = await getDocs(collection(db, COL_EMP));
+  employeesCache = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+  return employeesCache;
+}
+async function loadStores(){
+  const snap = await getDocs(collection(db, COL_STORE));
+  storesCache = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+  return storesCache;
+}
+
+/* ---------------- LOGIN ---------------- */
+function resetPin(){
+  pinBuffer = "";
+  renderPinDots();
+  $("#loginMsg").textContent = "";
+}
+function renderPinDots(){
+  const dots = $all("#pinDots .pin-dot");
+  dots.forEach((d,i)=> d.classList.toggle("filled", i < pinBuffer.length));
+}
+async function handlePinDigit(k){
+  if(pinBuffer.length >= 4) return;
+  pinBuffer += k;
+  renderPinDots();
+  if(pinBuffer.length === 4){
+    await attemptLogin(pinBuffer);
+  }
+}
+async function attemptLogin(pin){
+  $("#loginMsg").textContent = "جارِ التحقق...";
+  await loadEmployees();
+  if(pin === ADMIN_PIN){
+    resetPin();
+    enterAdmin();
+    return;
+  }
+  const emp = employeesCache.find(e => e.code === pin && e.active !== false);
+  if(emp){
+    currentEmployee = emp;
+    resetPin();
+    await enterEmployee(emp);
+  } else {
+    $("#loginMsg").textContent = "الرمز غير صحيح";
+    setTimeout(resetPin, 700);
+  }
+}
+
+/* ---------------- EMPLOYEE SCREEN ---------------- */
+let empClockInterval = null;
+async function enterEmployee(emp){
+  $("#screen-login").classList.add("hidden");
+  $("#screen-admin").classList.add("hidden");
+  $("#screen-employee").classList.remove("hidden");
+  $("#empName").textContent = emp.name;
+  const store = storesCache.find(s=>s.id===emp.storeId);
+  $("#empSub").textContent = store ? `فرع ${store.name}` : "بدون فرع محدد";
+
+  updateClock();
+  if(empClockInterval) clearInterval(empClockInterval);
+  empClockInterval = setInterval(updateClock, 1000*20);
+
+  await refreshEmployeeStatus();
+  locateAndPrepare();
+}
+function updateClock(){
+  const now = new Date();
+  $("#nowDate").textContent = now.toLocaleDateString("ar-IQ",{weekday:"long", day:"numeric", month:"long"});
+  $("#nowTime").textContent = timeStr(now);
+}
+
+let lastKnownPosition = null;
+function locateAndPrepare(){
+  $("#gpsStatus").textContent = "جارِ تحديد الموقع...";
+  $("#btnCheckAction").disabled = true;
+  if(!navigator.geolocation){
+    $("#gpsStatus").textContent = "الجهاز لا يدعم تحديد الموقع";
+    $("#btnCheckAction").disabled = false;
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(pos=>{
+    lastKnownPosition = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    evaluateGeofence();
+  }, err=>{
+    $("#gpsStatus").textContent = "تعذّر الوصول للموقع — تأكد من تفعيل صلاحية الموقع";
+    $("#btnCheckAction").disabled = false; // allow anyway, will record without geofence lock
+  }, { enableHighAccuracy:true, timeout:12000 });
+}
+function evaluateGeofence(){
+  const store = storesCache.find(s=>s.id===currentEmployee.storeId);
+  if(!store || store.lat==null){
+    $("#gpsStatus").textContent = "تم تحديد موقعك";
+    $("#btnCheckAction").disabled = false;
+    return;
+  }
+  const dist = haversine(lastKnownPosition.lat, lastKnownPosition.lng, store.lat, store.lng);
+  const radius = store.radius || 150;
+  if(dist <= radius){
+    $("#gpsStatus").innerHTML = `<span class="pill pill-green">داخل نطاق ${store.name}</span>`;
+    $("#btnCheckAction").disabled = false;
+  } else {
+    $("#gpsStatus").innerHTML = `<span class="pill pill-red">خارج نطاق ${store.name} (${Math.round(dist)} م)</span>`;
+    $("#btnCheckAction").disabled = false; // still allow, admin can review from the log
+  }
+}
+
+async function refreshEmployeeStatus(){
+  const today = dateStr(new Date());
+  const ref = doc(db, COL_ATT, `${currentEmployee.id}_${today}`);
+  const snap = await getDoc(ref);
+  const btn = $("#btnCheckAction");
+  const pillWrap = $("#empStatusPill");
+  const log = $("#todayLog");
+  if(!snap.exists() || !snap.data().checkInTime){
+    btn.textContent = "تسجيل حضور";
+    btn.className = "btn btn-primary";
+    btn.dataset.action = "in";
+    pillWrap.innerHTML = `<span class="pill pill-muted">لم تسجّل حضور بعد</span>`;
+    log.textContent = "لا يوجد تسجيل بعد اليوم";
+  } else {
+    const data = snap.data();
+    if(data.checkOutTime){
+      btn.textContent = "تم تسجيل الانصراف";
+      btn.className = "btn btn-outline";
+      btn.disabled = true;
+      btn.dataset.action = "done";
+      pillWrap.innerHTML = `<span class="pill pill-green">اكتمل اليوم</span>`;
+    } else {
+      btn.textContent = "تسجيل انصراف";
+      btn.className = "btn btn-red";
+      btn.dataset.action = "out";
+      pillWrap.innerHTML = `<span class="pill pill-gold">مسجّل حضور — بانتظار الانصراف</span>`;
+    }
+    log.innerHTML = `دخول: <b>${data.checkInTime||"—"}</b>${data.lateMinutes>0?` <span class="pill pill-red">تأخير ${data.lateMinutes} د</span>`:""}<br>${data.checkOutTime?`خروج: <b>${data.checkOutTime}</b>${data.earlyMinutes>0?` <span class="pill pill-red">مبكر ${data.earlyMinutes} د</span>`:""}`:""}`;
+  }
+}
+
+async function handleCheckAction(){
+  const btn = $("#btnCheckAction");
+  const action = btn.dataset.action;
+  if(action !== "in" && action !== "out") return;
+  btn.disabled = true;
+  btn.textContent = "جارِ الحفظ...";
+  const now = new Date();
+  const today = dateStr(now);
+  const ref = doc(db, COL_ATT, `${currentEmployee.id}_${today}`);
+
+  if(action === "in"){
+    let lateMinutes = 0;
+    if(currentEmployee.workStart){
+      const scheduled = minutesFromHHMM(currentEmployee.workStart);
+      const actual = now.getHours()*60+now.getMinutes();
+      lateMinutes = Math.max(0, actual - scheduled);
+    }
+    await setDoc(ref, {
+      employeeId: currentEmployee.id,
+      employeeName: currentEmployee.name,
+      date: today,
+      checkInTime: timeStr(now),
+      checkInLoc: lastKnownPosition || null,
+      lateMinutes,
+      createdAt: serverTimestamp()
+    }, { merge:true });
+    showToast("تم تسجيل الحضور ✅");
+  } else if(action === "out"){
+    let earlyMinutes = 0;
+    if(currentEmployee.workEnd){
+      const scheduled = minutesFromHHMM(currentEmployee.workEnd);
+      const actual = now.getHours()*60+now.getMinutes();
+      earlyMinutes = Math.max(0, scheduled - actual);
+    }
+    await updateDoc(ref, {
+      checkOutTime: timeStr(now),
+      checkOutLoc: lastKnownPosition || null,
+      earlyMinutes
+    });
+    showToast("تم تسجيل الانصراف ✅");
+  }
+  await refreshEmployeeStatus();
+}
+
+/* ---------------- ADMIN SHELL ---------------- */
+async function enterAdmin(){
+  $("#screen-login").classList.add("hidden");
+  $("#screen-employee").classList.add("hidden");
+  $("#screen-admin").classList.remove("hidden");
+  await Promise.all([loadEmployees(), loadStores()]);
+  switchTab("overview");
+}
+function switchTab(tab){
+  $all(".tab-panel").forEach(p=>p.classList.add("hidden"));
+  $(`#tab-${tab}`).classList.remove("hidden");
+  $all(".nav-btn").forEach(b=> b.classList.toggle("active", b.dataset.tab===tab));
+  if(tab==="overview") renderOverview();
+  if(tab==="employees") renderEmployeeList();
+  if(tab==="stores") renderStoreList();
+  if(tab==="deductions") renderDeductionList();
+  if(tab==="payroll") renderPayroll();
+  if(tab==="log") renderLog();
+}
+
+/* ---- Overview tab ---- */
+async function renderOverview(){
+  const today = new Date();
+  $("#ovToday").textContent = today.toLocaleDateString("ar-IQ",{weekday:"long", day:"numeric", month:"long"});
+  const todayStr = dateStr(today);
+  const wrap = $("#ovList");
+  wrap.innerHTML = `<div class="spinner"></div>`;
+  const attSnap = await getDocs(query(collection(db, COL_ATT), where("date","==",todayStr)));
+  const attMap = {};
+  attSnap.docs.forEach(d=> attMap[d.data().employeeId] = d.data());
+
+  if(employeesCache.length===0){
+    wrap.innerHTML = `<div class="empty-state">ما عندك موظفين مضافين بعد</div>`;
+    return;
+  }
+  wrap.innerHTML = employeesCache.filter(e=>e.active!==false).map(e=>{
+    const rec = attMap[e.id];
+    let pill;
+    if(!rec || !rec.checkInTime) pill = `<span class="pill pill-muted">لم يحضر</span>`;
+    else if(rec.checkOutTime) pill = `<span class="pill pill-green">انصرف ${rec.checkOutTime}</span>`;
+    else pill = `<span class="pill pill-gold">حاضر ${rec.checkInTime}${rec.lateMinutes>0?` (تأخير ${rec.lateMinutes}د)`:""}</span>`;
+    return `<div class="employee-row">
+      <div class="name-block"><div class="avatar">${e.name?.[0]||"?"}</div><div>${e.name}</div></div>
+      ${pill}
+    </div>`;
+  }).join("");
+}
+
+/* ---- Employees tab ---- */
+function renderEmployeeList(){
+  const wrap = $("#empList");
+  if(employeesCache.length===0){
+    wrap.innerHTML = `<div class="empty-state">ما عندك موظفين مضافين بعد</div>`;
+    return;
+  }
+  wrap.innerHTML = employeesCache.map(e=>{
+    const store = storesCache.find(s=>s.id===e.storeId);
+    return `<div class="employee-row">
+      <div class="name-block">
+        <div class="avatar">${e.name?.[0]||"?"}</div>
+        <div>
+          <div style="font-weight:700;">${e.name} ${e.active===false?'<span class="pill pill-muted">موقوف</span>':""}</div>
+          <div class="muted" style="font-size:12px;">${store?store.name:"بدون فرع"} · ${e.workStart||"—"}–${e.workEnd||"—"} · ${money(e.weeklySalary||0)} د.ع/أسبوع</div>
+        </div>
+      </div>
+      <button class="icon-btn" data-edit-emp="${e.id}">✏️</button>
+    </div>`;
+  }).join("");
+  $all("[data-edit-emp]").forEach(b=> b.addEventListener("click", ()=> openEmployeeModal(b.dataset.editEmp)));
+}
+
+function openEmployeeModal(empId){
+  const emp = empId ? employeesCache.find(e=>e.id===empId) : null;
+  const workDays = emp?.workDays || [0,1,2,3,4,6]; // default: closed Friday
+  const storeOptions = storesCache.map(s=>`<option value="${s.id}" ${emp?.storeId===s.id?"selected":""}>${s.name}</option>`).join("");
+  const modal = `
+  <div class="modal-bg" id="empModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>${emp?"تعديل بيانات موظف":"إضافة موظف جديد"}</h3>
+      <div class="field"><label>الاسم</label><input id="mEmpName" value="${emp?.name||""}"></div>
+      <div class="field"><label>الرمز الخاص (4 أرقام)</label><input id="mEmpCode" maxlength="4" inputmode="numeric" value="${emp?.code||""}"></div>
+      <div class="field"><label>الراتب الأسبوعي (د.ع)</label><input id="mEmpSalary" type="number" value="${emp?.weeklySalary||""}"></div>
+      <div class="field"><label>الفرع</label><select id="mEmpStore"><option value="">— بدون —</option>${storeOptions}</select></div>
+      <div class="row">
+        <div class="field"><label>بداية الدوام</label><input id="mEmpStart" type="time" value="${emp?.workStart||"09:00"}"></div>
+        <div class="field"><label>نهاية الدوام</label><input id="mEmpEnd" type="time" value="${emp?.workEnd||"17:00"}"></div>
+      </div>
+      <div class="field">
+        <label>أيام الدوام</label>
+        <div class="days-grid" id="mEmpDays">
+          ${DAY_SHORT.map((d,i)=>`<div class="chip-check ${workDays.includes(i)?"on":""}" data-day="${i}">${d}</div>`).join("")}
+        </div>
+      </div>
+      ${emp?`<div class="field"><label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="mEmpActive" style="width:auto;" ${emp.active!==false?"checked":""}> الموظف نشط</label></div>`:""}
+      <button class="btn btn-primary" id="btnSaveEmp" style="margin-top:6px;">حفظ</button>
+      ${emp?`<button class="btn btn-outline" id="btnDeleteEmp" style="margin-top:10px;color:var(--red);border-color:var(--red);">حذف الموظف</button>`:""}
+      <button class="link-btn" id="btnCloseEmpModal" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $all("#mEmpDays .chip-check").forEach(c=> c.addEventListener("click", ()=> c.classList.toggle("on")));
+  $("#btnCloseEmpModal").addEventListener("click", closeModal);
+  $("#btnSaveEmp").addEventListener("click", ()=> saveEmployee(empId));
+  if(emp){
+    $("#btnDeleteEmp").addEventListener("click", ()=> deleteEmployee(empId));
+  }
+}
+function closeModal(){ $("#modalRoot").innerHTML = ""; }
+
+async function saveEmployee(empId){
+  const name = $("#mEmpName").value.trim();
+  const code = $("#mEmpCode").value.trim();
+  const salary = Number($("#mEmpSalary").value)||0;
+  const storeId = $("#mEmpStore").value;
+  const workStart = $("#mEmpStart").value;
+  const workEnd = $("#mEmpEnd").value;
+  const workDays = $all("#mEmpDays .chip-check.on").map(c=>Number(c.dataset.day));
+  if(!name || code.length!==4){ showToast("تأكد من الاسم والرمز (4 أرقام)"); return; }
+  const dupCode = employeesCache.find(e=> e.code===code && e.id!==empId);
+  if(dupCode){ showToast("هذا الرمز مستخدم لموظف آخر"); return; }
+
+  const data = { name, code, weeklySalary:salary, storeId, workStart, workEnd, workDays };
+  const activeEl = $("#mEmpActive");
+  if(activeEl) data.active = activeEl.checked;
+
+  if(empId){
+    await updateDoc(doc(db, COL_EMP, empId), data);
+    showToast("تم تحديث بيانات الموظف");
+  } else {
+    data.active = true;
+    await addDoc(collection(db, COL_EMP), data);
+    showToast("تمت إضافة الموظف");
+  }
+  closeModal();
+  await loadEmployees();
+  renderEmployeeList();
+}
+async function deleteEmployee(empId){
+  if(!confirm("حذف هذا الموظف نهائياً؟")) return;
+  await deleteDoc(doc(db, COL_EMP, empId));
+  closeModal();
+  await loadEmployees();
+  renderEmployeeList();
+  showToast("تم الحذف");
+}
+
+/* ---- Stores tab ---- */
+function renderStoreList(){
+  const wrap = $("#storeList");
+  if(storesCache.length===0){
+    wrap.innerHTML = `<div class="empty-state">ما عندك فروع مضافة بعد</div>`;
+    return;
+  }
+  wrap.innerHTML = storesCache.map(s=>`
+    <div class="employee-row">
+      <div>
+        <div style="font-weight:700;">${s.name}</div>
+        <div class="muted" style="font-size:12px;">${s.lat?`${s.lat.toFixed(5)}, ${s.lng.toFixed(5)} · نطاق ${s.radius||150} م`:"بدون إحداثيات"}</div>
+      </div>
+      <button class="icon-btn" data-edit-store="${s.id}">✏️</button>
+    </div>`).join("");
+  $all("[data-edit-store]").forEach(b=> b.addEventListener("click", ()=> openStoreModal(b.dataset.editStore)));
+}
+function openStoreModal(storeId){
+  const store = storeId ? storesCache.find(s=>s.id===storeId) : null;
+  const modal = `
+  <div class="modal-bg" id="storeModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>${store?"تعديل فرع":"إضافة فرع"}</h3>
+      <div class="field"><label>اسم الفرع</label><input id="mStoreName" value="${store?.name||""}"></div>
+      <div class="row">
+        <div class="field"><label>Lat</label><input id="mStoreLat" type="number" step="any" value="${store?.lat??""}"></div>
+        <div class="field"><label>Lng</label><input id="mStoreLng" type="number" step="any" value="${store?.lng??""}"></div>
+      </div>
+      <div class="field"><label>نطاق القبول (متر)</label><input id="mStoreRadius" type="number" value="${store?.radius||150}"></div>
+      <button class="btn btn-outline" id="btnUseMyLocation" style="margin-bottom:12px;">📍 استخدم موقعي الحالي</button>
+      <button class="btn btn-primary" id="btnSaveStore">حفظ</button>
+      ${store?`<button class="btn btn-outline" id="btnDeleteStore" style="margin-top:10px;color:var(--red);border-color:var(--red);">حذف الفرع</button>`:""}
+      <button class="link-btn" id="btnCloseStoreModal" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCloseStoreModal").addEventListener("click", closeModal);
+  $("#btnSaveStore").addEventListener("click", ()=> saveStore(storeId));
+  $("#btnUseMyLocation").addEventListener("click", ()=>{
+    if(!navigator.geolocation){ showToast("الجهاز لا يدعم تحديد الموقع"); return; }
+    showToast("جارِ تحديد موقعك...");
+    navigator.geolocation.getCurrentPosition(pos=>{
+      $("#mStoreLat").value = pos.coords.latitude;
+      $("#mStoreLng").value = pos.coords.longitude;
+      showToast("تم تحديد الموقع");
+    }, ()=> showToast("تعذّر تحديد الموقع"));
+  });
+  if(store){
+    $("#btnDeleteStore").addEventListener("click", ()=> deleteStore(storeId));
+  }
+}
+async function saveStore(storeId){
+  const name = $("#mStoreName").value.trim();
+  const lat = $("#mStoreLat").value ? Number($("#mStoreLat").value) : null;
+  const lng = $("#mStoreLng").value ? Number($("#mStoreLng").value) : null;
+  const radius = Number($("#mStoreRadius").value)||150;
+  if(!name){ showToast("أدخل اسم الفرع"); return; }
+  const data = { name, lat, lng, radius };
+  if(storeId){
+    await updateDoc(doc(db, COL_STORE, storeId), data);
+  } else {
+    await addDoc(collection(db, COL_STORE), data);
+  }
+  closeModal();
+  await loadStores();
+  renderStoreList();
+  showToast("تم الحفظ");
+}
+async function deleteStore(storeId){
+  if(!confirm("حذف هذا الفرع؟")) return;
+  await deleteDoc(doc(db, COL_STORE, storeId));
+  closeModal();
+  await loadStores();
+  renderStoreList();
+}
+
+/* ---- Deductions tab ---- */
+async function renderDeductionList(){
+  const wrap = $("#dedList");
+  wrap.innerHTML = `<div class="spinner"></div>`;
+  const snap = await getDocs(query(collection(db, COL_DED), orderBy("date","desc")));
+  const list = snap.docs.map(d=>({id:d.id, ...d.data()}));
+  if(list.length===0){ wrap.innerHTML = `<div class="empty-state">لا توجد استقطاعات مسجّلة</div>`; return; }
+  wrap.innerHTML = list.map(d=>`
+    <div class="employee-row">
+      <div>
+        <div style="font-weight:700;">${d.employeeName}</div>
+        <div class="muted" style="font-size:12px;">${d.date} · ${d.reason||"بدون سبب"}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span class="pill pill-red">${money(d.amount)} د.ع</span>
+        <button class="icon-btn" data-del-ded="${d.id}">🗑️</button>
+      </div>
+    </div>`).join("");
+  $all("[data-del-ded]").forEach(b=> b.addEventListener("click", async ()=>{
+    if(!confirm("حذف هذا الاستقطاع؟")) return;
+    await deleteDoc(doc(db, COL_DED, b.dataset.delDed));
+    renderDeductionList();
+  }));
+}
+function openDeductionModal(){
+  const empOptions = employeesCache.map(e=>`<option value="${e.id}">${e.name}</option>`).join("");
+  const modal = `
+  <div class="modal-bg" id="dedModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>إضافة استقطاع يدوي</h3>
+      <div class="field"><label>الموظف</label><select id="mDedEmp">${empOptions}</select></div>
+      <div class="field"><label>المبلغ (د.ع)</label><input id="mDedAmount" type="number"></div>
+      <div class="field"><label>التاريخ</label><input id="mDedDate" type="date" value="${dateStr(new Date())}"></div>
+      <div class="field"><label>السبب</label><input id="mDedReason" placeholder="مثال: غياب بدون إذن"></div>
+      <button class="btn btn-primary" id="btnSaveDed">حفظ</button>
+      <button class="link-btn" id="btnCloseDedModal" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCloseDedModal").addEventListener("click", closeModal);
+  $("#btnSaveDed").addEventListener("click", saveDeduction);
+}
+async function saveDeduction(){
+  const empId = $("#mDedEmp").value;
+  const emp = employeesCache.find(e=>e.id===empId);
+  const amount = Number($("#mDedAmount").value)||0;
+  const date = $("#mDedDate").value;
+  const reason = $("#mDedReason").value.trim();
+  if(!emp || amount<=0 || !date){ showToast("تأكد من تعبئة الحقول"); return; }
+  await addDoc(collection(db, COL_DED), { employeeId:empId, employeeName:emp.name, amount, date, reason, createdAt: serverTimestamp() });
+  closeModal();
+  showToast("تم إضافة الاستقطاع");
+  renderDeductionList();
+}
+
+/* ---- Payroll tab ---- */
+function renderWeekLabel(){
+  const end = addDays(weekStart,6);
+  $("#weekRangeLabel").textContent = `${fmtDateShort(weekStart)} — ${fmtDateShort(end)}`;
+}
+async function renderPayroll(){
+  renderWeekLabel();
+  const wrap = $("#payrollList");
+  wrap.innerHTML = `<div class="spinner"></div>`;
+  if(employeesCache.length===0){ wrap.innerHTML = `<div class="empty-state">ما عندك موظفين مضافين بعد</div>`; return; }
+
+  const weekDates = Array.from({length:7}, (_,i)=> addDays(weekStart,i));
+  const weekEndStr = dateStr(addDays(weekStart,6));
+  const weekStartStr = dateStr(weekStart);
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  const dedSnap = await getDocs(query(collection(db,COL_DED), where("date",">=",weekStartStr), where("date","<=",weekEndStr)));
+  const deductionsByEmp = {};
+  dedSnap.docs.forEach(d=>{
+    const v = d.data();
+    deductionsByEmp[v.employeeId] = (deductionsByEmp[v.employeeId]||0) + v.amount;
+  });
+
+  const attSnap = await getDocs(query(collection(db,COL_ATT), where("date",">=",weekStartStr), where("date","<=",weekEndStr)));
+  const attByEmpDate = {};
+  attSnap.docs.forEach(d=>{
+    const v = d.data();
+    attByEmpDate[`${v.employeeId}_${v.date}`] = v;
+  });
+
+  let rows = "";
+  for(const e of employeesCache.filter(e=>e.active!==false)){
+    const workDays = e.workDays || [];
+    const startMin = minutesFromHHMM(e.workStart);
+    const endMin = minutesFromHHMM(e.workEnd);
+    const dailyHours = (startMin!=null && endMin!=null) ? Math.max(0,(endMin-startMin)/60) : 0;
+    const scheduledDaysInWeek = weekDates.filter(d=> workDays.includes(d.getDay()));
+    const weeklyHours = dailyHours * scheduledDaysInWeek.length;
+    const hourlyRate = weeklyHours>0 ? (e.weeklySalary||0)/weeklyHours : 0;
+
+    let autoDeduction = 0;
+    let absentDays = 0, lateDays = 0;
+    scheduledDaysInWeek.forEach(d=>{
+      if(d > today) return; // don't judge future days
+      const rec = attByEmpDate[`${e.id}_${dateStr(d)}`];
+      if(!rec || !rec.checkInTime){
+        autoDeduction += dailyHours * hourlyRate;
+        absentDays++;
+      } else {
+        const lateMin = rec.lateMinutes||0;
+        const earlyMin = rec.earlyMinutes||0;
+        if(lateMin>0 || earlyMin>0) lateDays++;
+        autoDeduction += ((lateMin+earlyMin)/60) * hourlyRate;
+      }
+    });
+    const manualDeduction = deductionsByEmp[e.id]||0;
+    const net = (e.weeklySalary||0) - autoDeduction - manualDeduction;
+
+    rows += `<div class="card" style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-weight:800;">${e.name}</div>
+        <div class="pill pill-gold">${money(e.weeklySalary||0)} د.ع أساسي</div>
+      </div>
+      <table>
+        <tr><th>غياب</th><th>تأخير/مبكر</th><th>استقطاع تلقائي</th><th>استقطاع يدوي</th></tr>
+        <tr>
+          <td>${absentDays} يوم</td>
+          <td>${lateDays} يوم</td>
+          <td>${money(autoDeduction)}</td>
+          <td>${money(manualDeduction)}</td>
+        </tr>
+      </table>
+      <div class="stitch"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="muted">الصافي المستحق</span>
+        <span class="big-num" style="font-size:22px;color:var(--green);">${money(net)} د.ع</span>
+      </div>
+    </div>`;
+  }
+  wrap.innerHTML = rows;
+}
+
+/* ---- Log tab ---- */
+async function renderLog(){
+  const wrap = $("#logList");
+  wrap.innerHTML = `<div class="spinner"></div>`;
+  const snap = await getDocs(query(collection(db, COL_ATT), orderBy("date","desc")));
+  const list = snap.docs.map(d=>d.data()).slice(0,60);
+  if(list.length===0){ wrap.innerHTML = `<div class="empty-state">لا توجد سجلات بعد</div>`; return; }
+  wrap.innerHTML = `<table>
+    <tr><th>الموظف</th><th>التاريخ</th><th>دخول</th><th>خروج</th></tr>
+    ${list.map(v=>`<tr>
+      <td>${v.employeeName}</td>
+      <td>${v.date}</td>
+      <td>${v.checkInTime||"—"}${v.lateMinutes>0?` <span class="pill pill-red">${v.lateMinutes}د</span>`:""}</td>
+      <td>${v.checkOutTime||"—"}</td>
+    </tr>`).join("")}
+  </table>`;
+}
+
+/* ---------------- EVENT WIRING (Safari-safe: addEventListener, no inline onclick) ---------------- */
+$all(".pin-key[data-k]").forEach(k=> k.addEventListener("click", ()=> handlePinDigit(k.dataset.k)));
+$("#btnBackspace").addEventListener("click", ()=>{ pinBuffer = pinBuffer.slice(0,-1); renderPinDots(); });
+
+$("#btnCheckAction").addEventListener("click", handleCheckAction);
+$("#btnEmpLogout").addEventListener("click", ()=>{
+  currentEmployee = null;
+  if(empClockInterval) clearInterval(empClockInterval);
+  $("#screen-employee").classList.add("hidden");
+  $("#screen-login").classList.remove("hidden");
+  resetPin();
+});
+
+$all(".nav-btn").forEach(b=> b.addEventListener("click", ()=> switchTab(b.dataset.tab)));
+$("#btnAdminLogout").addEventListener("click", ()=>{
+  $("#screen-admin").classList.add("hidden");
+  $("#screen-login").classList.remove("hidden");
+  resetPin();
+});
+$("#btnAddEmployee").addEventListener("click", ()=> openEmployeeModal(null));
+$("#btnAddStore").addEventListener("click", ()=> openStoreModal(null));
+$("#btnAddDeduction").addEventListener("click", openDeductionModal);
+$("#btnWeekPrev").addEventListener("click", ()=>{ weekStart = addDays(weekStart,-7); renderPayroll(); });
+$("#btnWeekNext").addEventListener("click", ()=>{ weekStart = addDays(weekStart,7); renderPayroll(); });
+
+/* ---------------- BOOT ---------------- */
+(async function boot(){
+  await loadConfig();
+  await Promise.all([loadEmployees(), loadStores()]);
+})();
+</script>
+</body>
+</html>
