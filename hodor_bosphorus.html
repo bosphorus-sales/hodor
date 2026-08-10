@@ -270,25 +270,30 @@
       <!-- TAB: payroll -->
       <div id="tab-payroll" class="tab-panel hidden">
         <div class="card">
-          <h3>الأسبوع</h3>
-          <div class="row" style="align-items:center;">
-            <button class="btn btn-outline btn-sm" id="btnWeekPrev">‹ السابق</button>
-            <div class="center" style="flex:2;">
-              <div style="font-weight:700;font-size:13px;" id="weekRangeLabel">—</div>
-            </div>
-            <button class="btn btn-outline btn-sm" id="btnWeekNext">التالي ›</button>
-          </div>
-        </div>
-        <div class="card">
           <div id="payrollList"><div class="spinner"></div></div>
         </div>
       </div>
 
-      <!-- TAB: log -->
-      <div id="tab-log" class="tab-panel hidden">
+      <!-- TAB: statements -->
+      <div id="tab-statements" class="tab-panel hidden">
         <div class="card">
-          <div id="logList"><div class="spinner"></div></div>
+          <h3>الكشف</h3>
+          <div class="field"><label>الموظف</label><select id="stmtEmp"><option value="all">كل الموظفين</option></select></div>
+          <div class="field">
+            <label>الفترة</label>
+            <div class="days-grid" style="grid-template-columns:repeat(3,1fr);">
+              <div class="chip-check on" data-period="week">أسبوعي</div>
+              <div class="chip-check" data-period="month">شهري</div>
+              <div class="chip-check" data-period="custom">تاريخ محدد</div>
+            </div>
+          </div>
+          <div class="row hidden" id="stmtCustomRange">
+            <div class="field"><label>من</label><input type="date" id="stmtFrom"></div>
+            <div class="field"><label>إلى</label><input type="date" id="stmtTo"></div>
+          </div>
+          <button class="btn btn-primary" id="btnRunStatement">عرض الكشف</button>
         </div>
+        <div id="statementResult"></div>
       </div>
 
     </main>
@@ -299,7 +304,7 @@
       <button class="nav-btn" data-tab="stores"><span class="nav-icon">📍</span>الفروع</button>
       <button class="nav-btn" data-tab="deductions"><span class="nav-icon">➖</span>استقطاع</button>
       <button class="nav-btn" data-tab="payroll"><span class="nav-icon">💰</span>الرواتب</button>
-      <button class="nav-btn" data-tab="log"><span class="nav-icon">📋</span>السجل</button>
+      <button class="nav-btn" data-tab="statements"><span class="nav-icon">📄</span>كشوفات</button>
     </nav>
     <button class="link-btn" id="btnAdminLogout" style="position:fixed;top:16px;left:16px;color:#fff;z-index:60;">خروج</button>
   </div>
@@ -334,6 +339,7 @@ const COL_EMP = "hr_employees";
 const COL_STORE = "hr_stores";
 const COL_ATT = "hr_attendance";
 const COL_DED = "hr_deductions";
+const COL_PAY = "hr_payments";
 const COL_CFG = "hr_config";
 
 const DAY_NAMES = ["الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
@@ -471,10 +477,11 @@ async function enterEmployee(emp){
 }
 
 async function renderEmployeeWeekSummary(){
-  const ws = getSaturdayOfCurrentWeek(new Date());
-  $("#empWeekRange").textContent = `${fmtDateShort(ws)} — ${fmtDateShort(addDays(ws,6))}`;
   const wrap = $("#empWeekSummary");
   wrap.innerHTML = `<div class="spinner"></div>`;
+  const balance = await computeEmployeeBalance(currentEmployee);
+  const ws = getSaturdayOfCurrentWeek(new Date());
+  $("#empWeekRange").textContent = `${fmtDateShort(ws)} — ${fmtDateShort(addDays(ws,6))}`;
   const b = await computeWeeklyBreakdown(currentEmployee, ws);
   const dayRows = b.dayDetails.map(d=>{
     if(d.type==="absent") return `<div class="employee-row"><span>${d.date} — غياب</span><span class="pill pill-red">${money(d.amount)} د.ع</span></div>`;
@@ -485,12 +492,13 @@ async function renderEmployeeWeekSummary(){
   }).join("");
   const manualRows = b.manualEntries.map(m=>`<div class="employee-row"><span>${m.date} — ${m.reason||"استقطاع"}</span><span class="pill pill-red">${money(m.amount)} د.ع</span></div>`).join("");
   wrap.innerHTML = `
-    <div class="employee-row"><span class="muted">الراتب الأساسي</span><b>${money(b.weeklySalary)} د.ع</b></div>
-    <div class="employee-row"><span class="muted">مجموع استقطاع الحضور</span><b style="color:var(--red);">${money(b.autoDeduction)} د.ع</b></div>
-    <div class="employee-row"><span class="muted">مجموع استقطاع يدوي</span><b style="color:var(--red);">${money(b.manualDeduction)} د.ع</b></div>
-    ${dayRows||manualRows ? `<div class="stitch"></div>${dayRows}${manualRows}` : ""}
+    <div class="center" style="margin-bottom:10px;">
+      <span class="muted" style="font-size:12px;">الرصيد المستحق لك الآن</span>
+      <div class="big-num" style="font-size:26px;color:var(--green);">${money(balance.balance)} د.ع</div>
+    </div>
     <div class="stitch"></div>
-    <div class="employee-row" style="border:none;"><span style="font-weight:700;">الصافي المتبقي</span><span class="big-num" style="font-size:20px;color:var(--green);">${money(b.net)} د.ع</span></div>
+    <div class="employee-row"><span class="muted">استقطاع هذا الأسبوع</span><b style="color:var(--red);">${money(b.autoDeduction+b.manualDeduction)} د.ع</b></div>
+    ${dayRows||manualRows ? `<div class="stitch"></div>${dayRows}${manualRows}` : ""}
   `;
 }
 function updateClock(){
@@ -569,6 +577,15 @@ async function handleCheckAction(){
   const btn = $("#btnCheckAction");
   const action = btn.dataset.action;
   if(action !== "in" && action !== "out") return;
+  pendingAction = action;
+  const mode = currentEmployee.faceDescriptor ? "verify" : "enroll";
+  openFaceModal(mode);
+}
+
+let pendingAction = null;
+async function proceedWithAttendance(){
+  const action = pendingAction;
+  const btn = $("#btnCheckAction");
   btn.disabled = true;
   btn.textContent = "جارِ الحفظ...";
   const now = new Date();
@@ -588,6 +605,7 @@ async function handleCheckAction(){
       date: today,
       checkInTime: timeStr(now),
       checkInLoc: lastKnownPosition || null,
+      faceVerified: true,
       lateMinutes,
       createdAt: serverTimestamp()
     }, { merge:true });
@@ -610,6 +628,102 @@ async function handleCheckAction(){
   await renderEmployeeWeekSummary();
 }
 
+/* ---------------- FACE RECOGNITION ---------------- */
+let faceApiLoaded = false, faceModelsLoaded = false, faceStream = null;
+function loadScriptTag(src){
+  return new Promise((resolve,reject)=>{
+    const s = document.createElement("script");
+    s.src = src; s.onload = ()=>resolve(); s.onerror = ()=>reject(new Error("load failed"));
+    document.head.appendChild(s);
+  });
+}
+async function ensureFaceApiReady(onStatus){
+  if(!faceApiLoaded){
+    onStatus && onStatus("جارِ تحميل مكتبة التعرف على الوجه...");
+    await loadScriptTag("https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js");
+    faceApiLoaded = true;
+  }
+  if(!faceModelsLoaded){
+    onStatus && onStatus("جارِ تحميل نموذج التعرف (أول مرة فقط)...");
+    const MODEL_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights";
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+    faceModelsLoaded = true;
+  }
+}
+function openFaceModal(mode){
+  const modal = `
+  <div class="modal-bg" id="faceModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>${mode==="enroll" ? "تسجيل وجهك لأول مرة" : "تأكيد الوجه"}</h3>
+      <div class="center muted" id="faceStatus" style="margin-bottom:10px;font-size:13px;">جارِ تجهيز الكاميرا...</div>
+      <video id="faceVideo" autoplay playsinline muted style="width:100%;border-radius:14px;background:#000;transform:scaleX(-1);"></video>
+      <button class="btn btn-primary" id="btnCaptureFace" style="margin-top:14px;" disabled>التقاط والتأكيد</button>
+      <button class="link-btn" id="btnCancelFace" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCancelFace").addEventListener("click", closeFaceModal);
+  startFaceCamera(mode);
+}
+function closeFaceModal(){
+  if(faceStream){ faceStream.getTracks().forEach(t=>t.stop()); faceStream = null; }
+  closeModal();
+}
+async function startFaceCamera(mode){
+  const statusEl = $("#faceStatus");
+  try{
+    await ensureFaceApiReady(msg=>{ if(statusEl) statusEl.textContent = msg; });
+    faceStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:"user" } });
+    const video = $("#faceVideo");
+    if(!video) return; // modal was closed while loading
+    video.srcObject = faceStream;
+    statusEl.textContent = "حاذِ وجهك داخل الإطار واضغط التقاط والتأكيد";
+    $("#btnCaptureFace").disabled = false;
+    $("#btnCaptureFace").addEventListener("click", ()=> captureFace(mode));
+  }catch(e){
+    console.error(e);
+    if(statusEl) statusEl.textContent = "تعذّر تشغيل الكاميرا — تأكد من صلاحية الوصول للكاميرا بالمتصفح";
+  }
+}
+async function captureFace(mode){
+  const video = $("#faceVideo");
+  const statusEl = $("#faceStatus");
+  const btn = $("#btnCaptureFace");
+  if(!video) return;
+  statusEl.textContent = "جارِ التحليل...";
+  btn.disabled = true;
+  let detection;
+  try{
+    detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+      .withFaceLandmarks().withFaceDescriptor();
+  }catch(e){ console.error(e); }
+  if(!detection){
+    statusEl.textContent = "ما تم العثور على وجه واضح — قرّب من الكاميرا وحسّن الإضاءة وحاول ثانية";
+    btn.disabled = false;
+    return;
+  }
+  const descriptor = Array.from(detection.descriptor);
+  if(mode === "enroll"){
+    await updateDoc(doc(db, COL_EMP, currentEmployee.id), { faceDescriptor: descriptor });
+    currentEmployee.faceDescriptor = descriptor;
+    closeFaceModal();
+    showToast("تم تسجيل الوجه ✅");
+    proceedWithAttendance();
+  } else {
+    const dist = faceapi.euclideanDistance(descriptor, currentEmployee.faceDescriptor);
+    if(dist < 0.5){
+      closeFaceModal();
+      proceedWithAttendance();
+    } else {
+      statusEl.textContent = "الوجه ما تطابق مع المسجّل — حاول ثانية";
+      btn.disabled = false;
+    }
+  }
+}
+
 /* ---------------- ADMIN SHELL ---------------- */
 async function enterAdmin(){
   $("#screen-login").classList.add("hidden");
@@ -626,8 +740,8 @@ function switchTab(tab){
   if(tab==="employees") renderEmployeeList();
   if(tab==="stores") renderStoreList();
   if(tab==="deductions") renderDeductionList();
-  if(tab==="payroll") renderPayroll();
-  if(tab==="log") renderLog();
+  if(tab==="payroll") renderPayrollBalances();
+  if(tab==="statements") renderStatementsTab();
 }
 
 /* ---- Overview tab ---- */
@@ -694,6 +808,7 @@ function openEmployeeModal(empId){
       <div class="field"><label>الرمز الخاص (4 أرقام)</label><input id="mEmpCode" maxlength="4" inputmode="numeric" value="${emp?.code||""}"></div>
       <div class="field"><label>الراتب الأسبوعي (د.ع)</label><input id="mEmpSalary" type="number" value="${emp?.weeklySalary||""}"></div>
       <div class="field"><label>الفرع</label><select id="mEmpStore"><option value="">— بدون —</option>${storeOptions}</select></div>
+      <div class="field"><label>تاريخ بداية احتساب الراتب</label><input id="mEmpPayrollStart" type="date" value="${emp?.payrollStartDate||dateStr(new Date())}"></div>
       <div class="row">
         <div class="field"><label>بداية الدوام</label><input id="mEmpStart" type="time" value="${emp?.workStart||"09:00"}"></div>
         <div class="field"><label>نهاية الدوام</label><input id="mEmpEnd" type="time" value="${emp?.workEnd||"17:00"}"></div>
@@ -711,6 +826,7 @@ function openEmployeeModal(empId){
       </div>
       ${emp?`<div class="field"><label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="mEmpActive" style="width:auto;" ${emp.active!==false?"checked":""}> الموظف نشط</label></div>`:""}
       <button class="btn btn-primary" id="btnSaveEmp" style="margin-top:6px;">حفظ</button>
+      ${emp?.faceDescriptor ? `<button class="btn btn-outline" id="btnResetFace" style="margin-top:10px;">🔄 إعادة تسجيل الوجه</button>` : ""}
       ${emp?`<button class="btn btn-outline" id="btnDeleteEmp" style="margin-top:10px;color:var(--red);border-color:var(--red);">حذف الموظف</button>`:""}
       <button class="link-btn" id="btnCloseEmpModal" style="width:100%;margin-top:12px;">إلغاء</button>
     </div>
@@ -721,6 +837,17 @@ function openEmployeeModal(empId){
   $("#btnSaveEmp").addEventListener("click", ()=> saveEmployee(empId));
   if(emp){
     $("#btnDeleteEmp").addEventListener("click", ()=> deleteEmployee(empId));
+  }
+  const resetFaceBtn = $("#btnResetFace");
+  if(resetFaceBtn){
+    resetFaceBtn.addEventListener("click", async ()=>{
+      if(!confirm("حذف الوجه المسجّل؟ الموظف راح يسجّل وجهه من جديد بأول تسجيل حضور قادم.")) return;
+      await updateDoc(doc(db, COL_EMP, empId), { faceDescriptor: null });
+      showToast("تم حذف الوجه المسجّل");
+      closeModal();
+      await loadEmployees();
+      renderEmployeeList();
+    });
   }
   const initialTiers = (emp?.lateTiers && emp.lateTiers.length) ? emp.lateTiers : [{minutes:15, amount:5000},{minutes:60, amount:10000}];
   renderTierRows(initialTiers);
@@ -759,11 +886,12 @@ async function saveEmployee(empId){
   const workEnd = $("#mEmpEnd").value;
   const workDays = $all("#mEmpDays .chip-check.on").map(c=>Number(c.dataset.day));
   const lateTiers = readTierRows().filter(t=>t.minutes>0).sort((a,b)=>a.minutes-b.minutes);
+  const payrollStartDate = $("#mEmpPayrollStart").value || dateStr(new Date());
   if(!name || code.length!==4){ showToast("تأكد من الاسم والرمز (4 أرقام)"); return; }
   const dupCode = employeesCache.find(e=> e.code===code && e.id!==empId);
   if(dupCode){ showToast("هذا الرمز مستخدم لموظف آخر"); return; }
 
-  const data = { name, code, weeklySalary:salary, storeId, workStart, workEnd, workDays, lateTiers };
+  const data = { name, code, weeklySalary:salary, storeId, workStart, workEnd, workDays, lateTiers, payrollStartDate };
   const activeEl = $("#mEmpActive");
   if(activeEl) data.active = activeEl.checked;
 
@@ -921,106 +1049,210 @@ async function saveDeduction(){
   renderDeductionList();
 }
 
-/* ---- Shared weekly breakdown calc (used by payroll tab + employee self-view) ---- */
-async function computeWeeklyBreakdown(emp, weekStartDate){
-  const weekDates = Array.from({length:7}, (_,i)=> addDays(weekStartDate,i));
-  const weekStartStr = dateStr(weekStartDate);
-  const weekEndStr = dateStr(addDays(weekStartDate,6));
+/* ---- Shared breakdown calc for any date range (used by balance calc, statements, employee self-view) ---- */
+async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
+  const rangeStartStr = dateStr(rangeStartDate);
+  const rangeEndStr = dateStr(rangeEndDate);
   const today = new Date(); today.setHours(0,0,0,0);
+  const effectiveEnd = rangeEndDate < today ? rangeEndDate : today;
 
   const workDays = emp.workDays || [];
   const startMin = minutesFromHHMM(emp.workStart);
   const endMin = minutesFromHHMM(emp.workEnd);
   const dailyHours = (startMin!=null && endMin!=null) ? Math.max(0,(endMin-startMin)/60) : 0;
-  const scheduledDaysInWeek = weekDates.filter(d=> workDays.includes(d.getDay()));
-  const weeklyHours = dailyHours * scheduledDaysInWeek.length;
-  const hourlyRate = weeklyHours>0 ? (emp.weeklySalary||0)/weeklyHours : 0;
+  const scheduledDaysInWeekBase = 7; // used only to derive an hourly rate proxy for absence deduction
+  const hourlyRate = dailyHours>0 ? (emp.weeklySalary||0) / (dailyHours * (workDays.length||6)) : 0;
 
-  const attSnap = await getDocs(query(collection(db,COL_ATT), where("employeeId","==",emp.id), where("date",">=",weekStartStr), where("date","<=",weekEndStr)));
+  const attSnap = await getDocs(query(collection(db,COL_ATT), where("employeeId","==",emp.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
   const attByDate = {};
   attSnap.docs.forEach(d=> attByDate[d.data().date] = d.data());
 
-  const dedSnap = await getDocs(query(collection(db,COL_DED), where("employeeId","==",emp.id), where("date",">=",weekStartStr), where("date","<=",weekEndStr)));
+  const dedSnap = await getDocs(query(collection(db,COL_DED), where("employeeId","==",emp.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
   const manualEntries = dedSnap.docs.map(d=>d.data());
   const manualDeduction = manualEntries.reduce((s,v)=>s+v.amount,0);
 
   let autoDeduction = 0, absentDays = 0, lateDays = 0;
   const dayDetails = [];
-  scheduledDaysInWeek.forEach(d=>{
-    if(d > today) return; // don't judge future days
-    const rec = attByDate[dateStr(d)];
-    if(!rec || !rec.checkInTime){
-      const amt = dailyHours * hourlyRate;
-      autoDeduction += amt;
-      absentDays++;
-      dayDetails.push({ date:dateStr(d), type:"absent", amount:amt });
-    } else {
-      const lateMin = rec.lateMinutes||0;
-      const earlyMin = rec.earlyMinutes||0;
-      const amt = deductionForMinutes(emp.lateTiers, lateMin) + deductionForMinutes(emp.lateTiers, earlyMin);
-      if(amt>0) lateDays++;
-      autoDeduction += amt;
-      if(amt>0) dayDetails.push({ date:dateStr(d), type:"late", lateMin, earlyMin, amount:amt });
+  let cur = new Date(rangeStartDate);
+  while(cur <= effectiveEnd){
+    if(workDays.includes(cur.getDay())){
+      const rec = attByDate[dateStr(cur)];
+      if(!rec || !rec.checkInTime){
+        const amt = dailyHours * hourlyRate;
+        autoDeduction += amt;
+        absentDays++;
+        dayDetails.push({ date:dateStr(cur), type:"absent", amount:amt });
+      } else {
+        const lateMin = rec.lateMinutes||0;
+        const earlyMin = rec.earlyMinutes||0;
+        const amt = deductionForMinutes(emp.lateTiers, lateMin) + deductionForMinutes(emp.lateTiers, earlyMin);
+        if(amt>0) lateDays++;
+        autoDeduction += amt;
+        if(amt>0) dayDetails.push({ date:dateStr(cur), type:"late", lateMin, earlyMin, amount:amt });
+      }
     }
-  });
-  const net = (emp.weeklySalary||0) - autoDeduction - manualDeduction;
-  return { autoDeduction, manualDeduction, manualEntries, absentDays, lateDays, dayDetails, net, weeklySalary: emp.weeklySalary||0 };
+    cur = addDays(cur,1);
+  }
+  return { autoDeduction, manualDeduction, manualEntries, absentDays, lateDays, dayDetails, weeklySalary: emp.weeklySalary||0 };
+}
+async function computeWeeklyBreakdown(emp, weekStartDate){
+  const b = await computeBreakdownForRange(emp, weekStartDate, addDays(weekStartDate,6));
+  const net = (emp.weeklySalary||0) - b.autoDeduction - b.manualDeduction;
+  return { ...b, net };
+}
+function countFridaysInRange(startDate, endDateInclusive){
+  let n=0, cur=new Date(startDate);
+  while(cur <= endDateInclusive){
+    if(cur.getDay()===5) n++; // Friday
+    cur = addDays(cur,1);
+  }
+  return n;
+}
+async function computeEmployeeBalance(emp){
+  const start = emp.payrollStartDate ? new Date(emp.payrollStartDate+"T00:00:00") : new Date();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const fridayCount = countFridaysInRange(start, today);
+  const totalCredited = fridayCount * (emp.weeklySalary||0);
+  const breakdown = await computeBreakdownForRange(emp, start, today);
+  const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",emp.id)));
+  const totalPaid = paySnap.docs.reduce((s,d)=> s + (d.data().amount||0), 0);
+  const balance = totalCredited - breakdown.autoDeduction - breakdown.manualDeduction - totalPaid;
+  return { fridayCount, totalCredited, autoDeduction: breakdown.autoDeduction, manualDeduction: breakdown.manualDeduction, totalPaid, balance };
 }
 
-/* ---- Payroll tab ---- */
-function renderWeekLabel(){
-  const end = addDays(weekStart,6);
-  $("#weekRangeLabel").textContent = `${fmtDateShort(weekStart)} — ${fmtDateShort(end)}`;
-}
-async function renderPayroll(){
-  renderWeekLabel();
+/* ---- Payroll tab: live balances + settle button ---- */
+async function renderPayrollBalances(){
   const wrap = $("#payrollList");
   wrap.innerHTML = `<div class="spinner"></div>`;
   if(employeesCache.length===0){ wrap.innerHTML = `<div class="empty-state">ما عندك موظفين مضافين بعد</div>`; return; }
 
   let rows = "";
   for(const e of employeesCache.filter(e=>e.active!==false)){
-    const b = await computeWeeklyBreakdown(e, weekStart);
+    const b = await computeEmployeeBalance(e);
     rows += `<div class="card" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div style="font-weight:800;">${e.name}</div>
-        <div class="pill pill-gold">${money(b.weeklySalary)} د.ع أساسي</div>
+        <div class="pill pill-gold">${money(e.weeklySalary||0)} د.ع/أسبوع</div>
       </div>
       <table>
-        <tr><th>غياب</th><th>تأخير/مبكر</th><th>استقطاع تلقائي</th><th>استقطاع يدوي</th></tr>
+        <tr><th>أسابيع محتسبة</th><th>استقطاعات</th><th>مدفوع سابقاً</th></tr>
         <tr>
-          <td>${b.absentDays} يوم</td>
-          <td>${b.lateDays} يوم</td>
-          <td>${money(b.autoDeduction)}</td>
-          <td>${money(b.manualDeduction)}</td>
+          <td>${b.fridayCount}</td>
+          <td>${money(b.autoDeduction+b.manualDeduction)}</td>
+          <td>${money(b.totalPaid)}</td>
         </tr>
       </table>
       <div class="stitch"></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span class="muted">الصافي المستحق</span>
-        <span class="big-num" style="font-size:22px;color:var(--green);">${money(b.net)} د.ع</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <span class="muted">الرصيد المستحق حالياً</span>
+        <span class="big-num" style="font-size:22px;color:${b.balance>0?"var(--green)":"var(--muted)"};">${money(b.balance)} د.ع</span>
       </div>
+      <button class="btn btn-primary btn-sm" style="width:100%;" data-settle="${e.id}" ${b.balance<=0?"disabled":""}>تسليم الراتب</button>
     </div>`;
   }
   wrap.innerHTML = rows;
+  $all("[data-settle]").forEach(b=> b.addEventListener("click", ()=> openSettleModal(b.dataset.settle)));
 }
 
-/* ---- Log tab ---- */
-async function renderLog(){
-  const wrap = $("#logList");
+function openSettleModal(empId){
+  const emp = employeesCache.find(e=>e.id===empId);
+  computeEmployeeBalance(emp).then(b=>{
+    const modal = `
+    <div class="modal-bg" id="settleModalBg">
+      <div class="modal">
+        <div class="modal-handle"></div>
+        <h3>تسليم الراتب — ${emp.name}</h3>
+        <div class="card center" style="margin-bottom:16px;">
+          <span class="muted">الرصيد المستحق حالياً</span>
+          <div class="big-num" style="font-size:26px;color:var(--green);">${money(b.balance)} د.ع</div>
+        </div>
+        <div class="field"><label>المبلغ المُسلَّم (د.ع)</label><input id="mPayAmount" type="number" value="${Math.round(b.balance)}"></div>
+        <div class="field"><label>ملاحظة (اختياري)</label><input id="mPayNote" placeholder="مثال: تسليم جزئي"></div>
+        <button class="btn btn-primary" id="btnSavePayment">تأكيد التسليم</button>
+        <button class="link-btn" id="btnCloseSettleModal" style="width:100%;margin-top:12px;">إلغاء</button>
+      </div>
+    </div>`;
+    $("#modalRoot").innerHTML = modal;
+    $("#btnCloseSettleModal").addEventListener("click", closeModal);
+    $("#btnSavePayment").addEventListener("click", ()=> savePayment(emp, b.balance));
+  });
+}
+async function savePayment(emp, currentBalance){
+  const amount = Number($("#mPayAmount").value)||0;
+  const note = $("#mPayNote").value.trim();
+  if(amount<=0){ showToast("أدخل مبلغ صحيح"); return; }
+  const type = amount < currentBalance ? "partial" : "full";
+  await addDoc(collection(db, COL_PAY), {
+    employeeId: emp.id, employeeName: emp.name, amount, type,
+    note: note || (type==="partial" ? "تسليم جزئي" : "تسليم كامل"),
+    date: dateStr(new Date()), createdAt: serverTimestamp()
+  });
+  closeModal();
+  showToast("تم تسجيل التسليم");
+  renderPayrollBalances();
+}
+
+/* ---- Statements tab ---- */
+function populateStatementEmployeeSelect(){
+  const sel = $("#stmtEmp");
+  if(!sel) return;
+  const current = sel.value;
+  sel.innerHTML = `<option value="all">كل الموظفين</option>` + employeesCache.map(e=>`<option value="${e.id}">${e.name}</option>`).join("");
+  if(current) sel.value = current;
+}
+function renderStatementsTab(){
+  populateStatementEmployeeSelect();
+}
+async function runStatement(){
+  const empSel = $("#stmtEmp").value;
+  const periodEl = $all(".chip-check[data-period].on")[0];
+  const period = periodEl ? periodEl.dataset.period : "week";
+  const today = new Date(); today.setHours(0,0,0,0);
+  let rangeStart, rangeEnd;
+  if(period==="week"){
+    rangeStart = getSaturdayOfCurrentWeek(today);
+    rangeEnd = addDays(rangeStart,6);
+  } else if(period==="month"){
+    rangeStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    rangeEnd = new Date(today.getFullYear(), today.getMonth()+1, 0);
+  } else {
+    const fromVal = $("#stmtFrom").value, toVal = $("#stmtTo").value;
+    if(!fromVal || !toVal){ showToast("حدد تاريخ البداية والنهاية"); return; }
+    rangeStart = new Date(fromVal+"T00:00:00");
+    rangeEnd = new Date(toVal+"T00:00:00");
+  }
+  const rangeStartStr = dateStr(rangeStart), rangeEndStr = dateStr(rangeEnd);
+  const targets = empSel==="all" ? employeesCache.filter(e=>e.active!==false) : employeesCache.filter(e=>e.id===empSel);
+  const wrap = $("#statementResult");
   wrap.innerHTML = `<div class="spinner"></div>`;
-  const snap = await getDocs(query(collection(db, COL_ATT), orderBy("date","desc")));
-  const list = snap.docs.map(d=>d.data()).slice(0,60);
-  if(list.length===0){ wrap.innerHTML = `<div class="empty-state">لا توجد سجلات بعد</div>`; return; }
-  wrap.innerHTML = `<table>
-    <tr><th>الموظف</th><th>التاريخ</th><th>دخول</th><th>خروج</th></tr>
-    ${list.map(v=>`<tr>
-      <td>${v.employeeName}</td>
-      <td>${v.date}</td>
-      <td>${v.checkInTime||"—"}${v.lateMinutes>0?` <span class="pill pill-red">${v.lateMinutes}د</span>`:""}</td>
-      <td>${v.checkOutTime||"—"}</td>
-    </tr>`).join("")}
-  </table>`;
+
+  let html = "";
+  for(const e of targets){
+    const b = await computeBreakdownForRange(e, rangeStart, rangeEnd);
+    const fridaysInRange = countFridaysInRange(rangeStart, rangeEnd);
+    const credited = fridaysInRange * (e.weeklySalary||0);
+    const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",e.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
+    const payments = paySnap.docs.map(d=>d.data());
+    const paidInRange = payments.reduce((s,v)=>s+v.amount,0);
+    const netChange = credited - b.autoDeduction - b.manualDeduction - paidInRange;
+
+    const dayRows = b.dayDetails.map(d=> d.type==="absent"
+      ? `<tr><td>${d.date}</td><td>غياب</td><td>${money(d.amount)}</td></tr>`
+      : `<tr><td>${d.date}</td><td>${d.lateMin>0?`تأخير ${d.lateMin}د `:""}${d.earlyMin>0?`مبكر ${d.earlyMin}د`:""}</td><td>${money(d.amount)}</td></tr>`
+    ).join("");
+    const manualRows = b.manualEntries.map(m=>`<tr><td>${m.date}</td><td>${m.reason||"استقطاع يدوي"}</td><td>${money(m.amount)}</td></tr>`).join("");
+    const payRows = payments.map(p=>`<tr><td>${p.date}</td><td>${p.note||"تسليم راتب"}</td><td style="color:var(--green);">${money(p.amount)}</td></tr>`).join("");
+
+    html += `<div class="card" style="margin-bottom:10px;">
+      <div style="font-weight:800;margin-bottom:8px;">${e.name} <span class="muted" style="font-weight:500;font-size:12px;">(${fmtDateShort(rangeStart)}–${fmtDateShort(rangeEnd)})</span></div>
+      <table>
+        <tr><th>رواتب مستحقة</th><th>استقطاعات</th><th>مدفوعات</th><th>صافي التغيّر</th></tr>
+        <tr><td>${money(credited)}</td><td>${money(b.autoDeduction+b.manualDeduction)}</td><td>${money(paidInRange)}</td><td style="font-weight:800;">${money(netChange)}</td></tr>
+      </table>
+      ${(dayRows||manualRows||payRows) ? `<div class="stitch"></div><table>${dayRows}${manualRows}${payRows}</table>` : ""}
+    </div>`;
+  }
+  wrap.innerHTML = html || `<div class="empty-state">لا توجد بيانات لهذه الفترة</div>`;
 }
 
 /* ---------------- EVENT WIRING (Safari-safe: addEventListener, no inline onclick) ---------------- */
@@ -1045,8 +1277,12 @@ $("#btnAdminLogout").addEventListener("click", ()=>{
 $("#btnAddEmployee").addEventListener("click", ()=> openEmployeeModal(null));
 $("#btnAddStore").addEventListener("click", ()=> openStoreModal(null));
 $("#btnAddDeduction").addEventListener("click", openDeductionModal);
-$("#btnWeekPrev").addEventListener("click", ()=>{ weekStart = addDays(weekStart,-7); renderPayroll(); });
-$("#btnWeekNext").addEventListener("click", ()=>{ weekStart = addDays(weekStart,7); renderPayroll(); });
+$all(".chip-check[data-period]").forEach(c=> c.addEventListener("click", ()=>{
+  $all(".chip-check[data-period]").forEach(x=>x.classList.remove("on"));
+  c.classList.add("on");
+  $("#stmtCustomRange").classList.toggle("hidden", c.dataset.period!=="custom");
+}));
+$("#btnRunStatement").addEventListener("click", runStatement);
 
 /* ---------------- BOOT ---------------- */
 (async function boot(){
