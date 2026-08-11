@@ -472,17 +472,18 @@ async function enterEmployee(emp){
   empClockInterval = setInterval(updateClock, 1000*20);
 
   await refreshEmployeeStatus();
-  await renderEmployeeWeekSummary();
   locateAndPrepare();
+  renderEmployeeWeekSummary(); // don't block GPS/check-in on this — runs independently
 }
 
 async function renderEmployeeWeekSummary(){
   const wrap = $("#empWeekSummary");
   wrap.innerHTML = `<div class="spinner"></div>`;
-  const balance = await computeEmployeeBalance(currentEmployee);
-  const ws = getSaturdayOfCurrentWeek(new Date());
-  $("#empWeekRange").textContent = `${fmtDateShort(ws)} — ${fmtDateShort(addDays(ws,6))}`;
-  const b = await computeWeeklyBreakdown(currentEmployee, ws);
+  try{
+    const balance = await computeEmployeeBalance(currentEmployee);
+    const ws = getSaturdayOfCurrentWeek(new Date());
+    $("#empWeekRange").textContent = `${fmtDateShort(ws)} — ${fmtDateShort(addDays(ws,6))}`;
+    const b = await computeWeeklyBreakdown(currentEmployee, ws);
   const dayRows = b.dayDetails.map(d=>{
     if(d.type==="absent") return `<div class="employee-row"><span>${d.date} — غياب</span><span class="pill pill-red">${money(d.amount)} د.ع</span></div>`;
     const parts=[];
@@ -500,6 +501,10 @@ async function renderEmployeeWeekSummary(){
     <div class="employee-row"><span class="muted">استقطاع هذا الأسبوع</span><b style="color:var(--red);">${money(b.autoDeduction+b.manualDeduction)} د.ع</b></div>
     ${dayRows||manualRows ? `<div class="stitch"></div>${dayRows}${manualRows}` : ""}
   `;
+  }catch(e){
+    console.error("renderEmployeeWeekSummary failed", e);
+    wrap.innerHTML = `<div class="muted center" style="padding:10px;">تعذّر تحميل البيانات المالية الآن — إذا استمرت المشكلة، أخبر الإدارة (قد يحتاج فهرس Firestore).</div>`;
+  }
 }
 function updateClock(){
   const now = new Date();
@@ -1128,7 +1133,14 @@ async function renderPayrollBalances(){
 
   let rows = "";
   for(const e of employeesCache.filter(e=>e.active!==false)){
-    const b = await computeEmployeeBalance(e);
+    let b;
+    try{
+      b = await computeEmployeeBalance(e);
+    }catch(err){
+      console.error("balance calc failed for", e.name, err);
+      rows += `<div class="card" style="margin-bottom:10px;"><div style="font-weight:800;margin-bottom:6px;">${e.name}</div><div class="muted">تعذّر حساب الرصيد — قد يحتاج فهرس Firestore (راجع الكونسول)</div></div>`;
+      continue;
+    }
     rows += `<div class="card" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div style="font-weight:800;">${e.name}</div>
