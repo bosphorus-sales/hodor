@@ -223,6 +223,11 @@
         </div>
         <div id="empWeekSummary"><div class="spinner"></div></div>
       </div>
+      <button class="btn btn-outline" id="btnRequestLeave" style="margin-bottom:14px;">📅 طلب إجازة</button>
+      <div class="card" id="empLeavesCard" style="display:none;">
+        <h3>طلبات إجازتي</h3>
+        <div id="empLeavesList"></div>
+      </div>
       <button class="link-btn" id="btnEmpLogout">تسجيل خروج</button>
     </main>
   </div>
@@ -245,6 +250,10 @@
 
       <!-- TAB: employees -->
       <div id="tab-employees" class="tab-panel hidden">
+        <div class="card" id="leaveRequestsCard" style="display:none;">
+          <h3>طلبات إجازة معلّقة</h3>
+          <div id="leaveRequestsList"></div>
+        </div>
         <button class="btn btn-primary" id="btnAddEmployee" style="margin-bottom:14px;">+ إضافة موظف جديد</button>
         <div class="card">
           <div id="empList"><div class="spinner"></div></div>
@@ -292,7 +301,9 @@
             <div class="field"><label>إلى</label><input type="date" id="stmtTo"></div>
           </div>
           <button class="btn btn-primary" id="btnRunStatement">عرض الكشف</button>
+          <button class="btn btn-outline" id="btnShareWhatsapp" style="margin-top:10px;display:none;">📤 مشاركة عبر واتساب</button>
         </div>
+        <div id="statementCalendar"></div>
         <div id="statementResult"></div>
       </div>
 
@@ -319,7 +330,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getFirestore, collection, doc, getDocs, getDoc, addDoc, updateDoc, deleteDoc,
-  setDoc, query, where, orderBy, serverTimestamp
+  setDoc, query, where, orderBy, serverTimestamp, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -340,6 +351,8 @@ const COL_STORE = "hr_stores";
 const COL_ATT = "hr_attendance";
 const COL_DED = "hr_deductions";
 const COL_PAY = "hr_payments";
+const COL_LEAVE = "hr_leaves";
+const COL_SPOT = "hr_spotchecks";
 const COL_CFG = "hr_config";
 
 const DAY_NAMES = ["الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
@@ -367,6 +380,25 @@ function minutesFromHHMM(hhmm){
   if(!hhmm) return null;
   const [h,m] = hhmm.split(":").map(Number);
   return h*60+m;
+}
+function getScheduleForDate(emp, date){
+  if(date.getDay()===5 && emp.fridayStart && emp.fridayEnd){
+    return { start: emp.fridayStart, end: emp.fridayEnd };
+  }
+  return { start: emp.workStart, end: emp.workEnd };
+}
+function hoursBetween(start, end){
+  const s = minutesFromHHMM(start), e = minutesFromHHMM(end);
+  return (s!=null && e!=null) ? Math.max(0,(e-s)/60) : 0;
+}
+function weeklyScheduledHours(emp){
+  const workDays = emp.workDays||[];
+  let total = 0;
+  workDays.forEach(dow=>{
+    if(dow===5 && emp.fridayStart && emp.fridayEnd) total += hoursBetween(emp.fridayStart, emp.fridayEnd);
+    else total += hoursBetween(emp.workStart, emp.workEnd);
+  });
+  return total;
 }
 function getSaturdayOfCurrentWeek(d){
   const date = new Date(d);
@@ -474,6 +506,8 @@ async function enterEmployee(emp){
   await refreshEmployeeStatus();
   locateAndPrepare();
   renderEmployeeWeekSummary(); // don't block GPS/check-in on this — runs independently
+  renderMyLeaves();
+  listenForSpotChecks();
 }
 
 async function renderEmployeeWeekSummary(){
@@ -588,7 +622,7 @@ async function handleCheckAction(){
 }
 
 let pendingAction = null;
-async function proceedWithAttendance(){
+async function proceedWithAttendance(faceSkipped){
   const action = pendingAction;
   const btn = $("#btnCheckAction");
   btn.disabled = true;
@@ -598,9 +632,10 @@ async function proceedWithAttendance(){
   const ref = doc(db, COL_ATT, `${currentEmployee.id}_${today}`);
 
   if(action === "in"){
+    const sched = getScheduleForDate(currentEmployee, now);
     let lateMinutes = 0;
-    if(currentEmployee.workStart){
-      const scheduled = minutesFromHHMM(currentEmployee.workStart);
+    if(sched.start){
+      const scheduled = minutesFromHHMM(sched.start);
       const actual = now.getHours()*60+now.getMinutes();
       lateMinutes = Math.max(0, actual - scheduled);
     }
@@ -610,27 +645,135 @@ async function proceedWithAttendance(){
       date: today,
       checkInTime: timeStr(now),
       checkInLoc: lastKnownPosition || null,
-      faceVerified: true,
+      faceVerified: !faceSkipped,
       lateMinutes,
       createdAt: serverTimestamp()
     }, { merge:true });
-    showToast("تم تسجيل الحضور ✅");
+    showToast(faceSkipped ? "تم تسجيل الحضور بدون تأكيد وجه ⚠️" : "تم تسجيل الحضور ✅");
   } else if(action === "out"){
+    const sched = getScheduleForDate(currentEmployee, now);
     let earlyMinutes = 0;
-    if(currentEmployee.workEnd){
-      const scheduled = minutesFromHHMM(currentEmployee.workEnd);
+    if(sched.end){
+      const scheduled = minutesFromHHMM(sched.end);
       const actual = now.getHours()*60+now.getMinutes();
       earlyMinutes = Math.max(0, scheduled - actual);
     }
     await updateDoc(ref, {
       checkOutTime: timeStr(now),
       checkOutLoc: lastKnownPosition || null,
+      checkOutFaceVerified: !faceSkipped,
       earlyMinutes
     });
-    showToast("تم تسجيل الانصراف ✅");
+    showToast(faceSkipped ? "تم تسجيل الانصراف بدون تأكيد وجه ⚠️" : "تم تسجيل الانصراف ✅");
   }
   await refreshEmployeeStatus();
   await renderEmployeeWeekSummary();
+}
+
+/* ---------------- LEAVE REQUESTS (employee side) ---------------- */
+function openLeaveRequestModal(){
+  const modal = `
+  <div class="modal-bg" id="leaveModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>طلب إجازة</h3>
+      <div class="field"><label>التاريخ</label><input id="mLeaveDate" type="date" value="${dateStr(new Date())}"></div>
+      <div class="field"><label>السبب</label><input id="mLeaveReason" placeholder="مثال: ظرف عائلي"></div>
+      <button class="btn btn-primary" id="btnSubmitLeave">إرسال الطلب</button>
+      <button class="link-btn" id="btnCloseLeaveModal" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCloseLeaveModal").addEventListener("click", closeModal);
+  $("#btnSubmitLeave").addEventListener("click", submitLeaveRequest);
+}
+async function submitLeaveRequest(){
+  const date = $("#mLeaveDate").value;
+  const reason = $("#mLeaveReason").value.trim();
+  if(!date){ showToast("حدد التاريخ"); return; }
+  await addDoc(collection(db, COL_LEAVE), {
+    employeeId: currentEmployee.id, employeeName: currentEmployee.name,
+    date, reason, status: "pending", createdAt: serverTimestamp()
+  });
+  closeModal();
+  showToast("تم إرسال طلب الإجازة، بانتظار موافقة الإدارة");
+  renderMyLeaves();
+}
+async function renderMyLeaves(){
+  const snap = await getDocs(query(collection(db, COL_LEAVE), where("employeeId","==",currentEmployee.id)));
+  const list = snap.docs.map(d=>d.data()).sort((a,b)=> b.date.localeCompare(a.date));
+  const card = $("#empLeavesCard");
+  if(list.length===0){ card.style.display="none"; return; }
+  card.style.display="block";
+  const statusPill = s=> s==="approved" ? `<span class="pill pill-green">موافَق</span>` : s==="rejected" ? `<span class="pill pill-red">مرفوض</span>` : `<span class="pill pill-gold">قيد الانتظار</span>`;
+  $("#empLeavesList").innerHTML = list.slice(0,10).map(l=>`
+    <div class="employee-row"><span>${l.date} — ${l.reason||"بدون سبب"}</span>${statusPill(l.status)}</div>
+  `).join("");
+}
+
+/* ---------------- SURPRISE SPOT-CHECK ---------------- */
+let spotCheckUnsub = null;
+function listenForSpotChecks(){
+  if(spotCheckUnsub) spotCheckUnsub();
+  const q = query(collection(db, COL_SPOT), where("employeeId","==",currentEmployee.id), where("status","==","pending"));
+  spotCheckUnsub = onSnapshot(q, snap=>{
+    snap.docChanges().forEach(change=>{
+      if(change.type==="added"){
+        showSpotCheckPrompt(change.doc.id, change.doc.data());
+      }
+    });
+  }, err=> console.error("spot check listener failed", err));
+}
+function showSpotCheckPrompt(spotId, data){
+  if($("#spotCheckModalBg")) return; // already showing one
+  const modal = `
+  <div class="modal-bg" id="spotCheckModalBg">
+    <div class="modal center">
+      <div class="modal-handle"></div>
+      <h3 style="color:var(--red);">⚠️ طلب تأكيد حضور فوري</h3>
+      <p class="muted">الإدارة تطلب تأكيد وجودك الحين بالمحل. اضغط الزر وأكّد وجهك خلال دقيقة.</p>
+      <button class="btn btn-red" id="btnRespondSpot">تأكيد الحضور الآن</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnRespondSpot").addEventListener("click", ()=> respondToSpotCheck(spotId, data));
+}
+async function respondToSpotCheck(spotId, data){
+  closeModal();
+  pendingSpotCheckId = spotId;
+  pendingSpotCheckRequestedAt = data.requestedAt;
+  openFaceModal("spotcheck");
+}
+let pendingSpotCheckId = null, pendingSpotCheckRequestedAt = null;
+async function finalizeSpotCheck(matched){
+  if(!pendingSpotCheckId) return;
+  const now = new Date();
+  let responseSeconds = null;
+  if(pendingSpotCheckRequestedAt && pendingSpotCheckRequestedAt.toDate){
+    responseSeconds = Math.round((now - pendingSpotCheckRequestedAt.toDate())/1000);
+  }
+  await updateDoc(doc(db, COL_SPOT, pendingSpotCheckId), {
+    status: matched ? "confirmed" : "failed",
+    respondedAt: serverTimestamp(),
+    responseSeconds,
+    loc: lastKnownPosition || null
+  });
+  showToast(matched ? "تم تأكيد حضورك ✅" : "تعذّر التطابق");
+  pendingSpotCheckId = null;
+}
+
+/* ---- Admin side: trigger + view spot checks (used from Overview tab) ---- */
+async function requestSpotCheck(empId){
+  const pendingSnap = await getDocs(query(collection(db,COL_SPOT), where("employeeId","==",empId), where("status","==","pending")));
+  if(!pendingSnap.empty){ showToast("أكو طلب معلّق أصلاً لهذا الموظف"); return; }
+  await addDoc(collection(db, COL_SPOT), {
+    employeeId: empId,
+    employeeName: employeesCache.find(e=>e.id===empId)?.name || "",
+    status: "pending",
+    requestedAt: serverTimestamp()
+  });
+  showToast("تم إرسال طلب البصمة المفاجئة");
+  renderOverview();
 }
 
 /* ---------------- FACE RECOGNITION ---------------- */
@@ -657,7 +800,10 @@ async function ensureFaceApiReady(onStatus){
     faceModelsLoaded = true;
   }
 }
+const FACE_MATCH_THRESHOLD = 0.62;
+let faceAttemptCount = 0;
 function openFaceModal(mode){
+  faceAttemptCount = 0;
   const modal = `
   <div class="modal-bg" id="faceModalBg">
     <div class="modal">
@@ -666,6 +812,10 @@ function openFaceModal(mode){
       <div class="center muted" id="faceStatus" style="margin-bottom:10px;font-size:13px;">جارِ تجهيز الكاميرا...</div>
       <video id="faceVideo" autoplay playsinline muted style="width:100%;border-radius:14px;background:#000;transform:scaleX(-1);"></video>
       <button class="btn btn-primary" id="btnCaptureFace" style="margin-top:14px;" disabled>التقاط والتأكيد</button>
+      <div id="faceFallbackRow" class="hidden" style="margin-top:10px;">
+        <button class="btn btn-outline" id="btnFaceReenroll" style="margin-bottom:8px;">🔄 إعادة تسجيل وجهي من جديد</button>
+        <button class="btn btn-gold" id="btnFaceSkip">تجاوز والمتابعة بالرمز فقط</button>
+      </div>
       <button class="link-btn" id="btnCancelFace" style="width:100%;margin-top:12px;">إلغاء</button>
     </div>
   </div>`;
@@ -706,8 +856,10 @@ async function captureFace(mode){
       .withFaceLandmarks().withFaceDescriptor();
   }catch(e){ console.error(e); }
   if(!detection){
+    faceAttemptCount++;
     statusEl.textContent = "ما تم العثور على وجه واضح — قرّب من الكاميرا وحسّن الإضاءة وحاول ثانية";
     btn.disabled = false;
+    if(mode==="verify" && faceAttemptCount>=3) showFaceFallback();
     return;
   }
   const descriptor = Array.from(detection.descriptor);
@@ -717,16 +869,55 @@ async function captureFace(mode){
     closeFaceModal();
     showToast("تم تسجيل الوجه ✅");
     proceedWithAttendance();
+  } else if(mode === "spotcheck"){
+    const dist = currentEmployee.faceDescriptor ? faceapi.euclideanDistance(descriptor, currentEmployee.faceDescriptor) : 1;
+    const matched = dist < FACE_MATCH_THRESHOLD;
+    closeFaceModal();
+    finalizeSpotCheck(matched);
   } else {
     const dist = faceapi.euclideanDistance(descriptor, currentEmployee.faceDescriptor);
-    if(dist < 0.5){
+    if(dist < FACE_MATCH_THRESHOLD){
       closeFaceModal();
       proceedWithAttendance();
     } else {
-      statusEl.textContent = "الوجه ما تطابق مع المسجّل — حاول ثانية";
-      btn.disabled = false;
+      faceAttemptCount++;
+      if(faceAttemptCount>=3){
+        showFaceFallback();
+      } else {
+        statusEl.textContent = `الوجه ما تطابق مع المسجّل — حاول ثانية (محاولة ${faceAttemptCount} من 3)`;
+        btn.disabled = false;
+      }
     }
   }
+}
+function showFaceFallback(){
+  const statusEl = $("#faceStatus");
+  const btn = $("#btnCaptureFace");
+  if(statusEl) statusEl.textContent = "ما قدرنا نأكد وجهك بعد عدة محاولات";
+  if(btn) btn.classList.add("hidden");
+  const row = $("#faceFallbackRow");
+  if(!row) return;
+  row.classList.remove("hidden");
+  $("#btnFaceReenroll").addEventListener("click", ()=>{
+    row.classList.add("hidden");
+    if(btn){ btn.classList.remove("hidden"); btn.disabled = false; }
+    faceAttemptCount = 0;
+    startFaceCameraModeOverride("enroll");
+  });
+  $("#btnFaceSkip").addEventListener("click", ()=>{
+    closeFaceModal();
+    if(pendingSpotCheckId){ finalizeSpotCheck(false); return; }
+    proceedWithAttendance(true); // true = mark as unverified face
+  });
+}
+function startFaceCameraModeOverride(newMode){
+  const btn = $("#btnCaptureFace");
+  if(btn){
+    const clone = btn.cloneNode(true); // strip old listeners
+    btn.parentNode.replaceChild(clone, btn);
+    clone.addEventListener("click", ()=> captureFace(newMode));
+  }
+  $("#faceStatus").textContent = "حاذِ وجهك داخل الإطار واضغط التقاط والتأكيد";
 }
 
 /* ---------------- ADMIN SHELL ---------------- */
@@ -742,7 +933,7 @@ function switchTab(tab){
   $(`#tab-${tab}`).classList.remove("hidden");
   $all(".nav-btn").forEach(b=> b.classList.toggle("active", b.dataset.tab===tab));
   if(tab==="overview") renderOverview();
-  if(tab==="employees") renderEmployeeList();
+  if(tab==="employees"){ renderEmployeeList(); renderPendingLeaveRequests(); }
   if(tab==="stores") renderStoreList();
   if(tab==="deductions") renderDeductionList();
   if(tab==="payroll") renderPayrollBalances();
@@ -760,6 +951,16 @@ async function renderOverview(){
   const attMap = {};
   attSnap.docs.forEach(d=> attMap[d.data().employeeId] = d.data());
 
+  let spotMap = {};
+  try{
+    const spotSnap = await getDocs(collection(db, COL_SPOT));
+    spotSnap.docs.forEach(d=>{
+      const v = d.data();
+      const existing = spotMap[v.employeeId];
+      if(!existing || (v.requestedAt && existing.requestedAt && v.requestedAt.toMillis() > existing.requestedAt.toMillis())) spotMap[v.employeeId] = v;
+    });
+  }catch(e){ console.error("spot overview failed", e); }
+
   if(employeesCache.length===0){
     wrap.innerHTML = `<div class="empty-state">ما عندك موظفين مضافين بعد</div>`;
     return;
@@ -770,14 +971,58 @@ async function renderOverview(){
     if(!rec || !rec.checkInTime) pill = `<span class="pill pill-muted">لم يحضر</span>`;
     else if(rec.checkOutTime) pill = `<span class="pill pill-green">انصرف ${rec.checkOutTime}</span>`;
     else pill = `<span class="pill pill-gold">حاضر ${rec.checkInTime}${rec.lateMinutes>0?` (تأخير ${rec.lateMinutes}د)`:""}</span>`;
+    const unverifiedBadge = (rec && (rec.faceVerified===false || rec.checkOutFaceVerified===false)) ? `<span class="pill pill-red" style="margin-inline-start:4px;">⚠️ بدون تأكيد وجه</span>` : "";
+    const spot = spotMap[e.id];
+    let spotBadge = "";
+    if(spot){
+      if(spot.status==="pending") spotBadge = `<span class="pill pill-gold" style="margin-inline-start:6px;">بانتظار رد البصمة</span>`;
+      else if(spot.status==="confirmed") spotBadge = `<span class="pill pill-green" style="margin-inline-start:6px;">✓ بصمة مؤكدة (${spot.responseSeconds??"?"}ث)</span>`;
+      else if(spot.status==="failed") spotBadge = `<span class="pill pill-red" style="margin-inline-start:6px;">فشل تطابق البصمة</span>`;
+    }
     return `<div class="employee-row">
-      <div class="name-block"><div class="avatar">${e.name?.[0]||"?"}</div><div>${e.name}</div></div>
-      ${pill}
+      <div class="name-block"><div class="avatar">${e.name?.[0]||"?"}</div><div>${e.name}${spotBadge}${unverifiedBadge}</div></div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        ${pill}
+        <button class="icon-btn" data-spotcheck="${e.id}" title="طلب بصمة مفاجئة">🎲</button>
+      </div>
     </div>`;
   }).join("");
+  $all("[data-spotcheck]").forEach(b=> b.addEventListener("click", ()=> requestSpotCheck(b.dataset.spotcheck)));
 }
 
 /* ---- Employees tab ---- */
+async function renderPendingLeaveRequests(){
+  const card = $("#leaveRequestsCard");
+  const wrap = $("#leaveRequestsList");
+  try{
+    const snap = await getDocs(query(collection(db, COL_LEAVE), where("status","==","pending")));
+    const list = snap.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=> a.date.localeCompare(b.date));
+    if(list.length===0){ card.style.display="none"; return; }
+    card.style.display="block";
+    wrap.innerHTML = list.map(l=>`
+      <div class="employee-row" style="flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:700;">${l.employeeName}</div>
+          <div class="muted" style="font-size:12px;">${l.date} — ${l.reason||"بدون سبب"}</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-green btn-sm" data-leave-approve="${l.id}">موافقة</button>
+          <button class="btn btn-red btn-sm" data-leave-reject="${l.id}">رفض</button>
+        </div>
+      </div>`).join("");
+    $all("[data-leave-approve]").forEach(b=> b.addEventListener("click", ()=> decideLeave(b.dataset.leaveApprove,"approved")));
+    $all("[data-leave-reject]").forEach(b=> b.addEventListener("click", ()=> decideLeave(b.dataset.leaveReject,"rejected")));
+  }catch(e){
+    console.error("leave requests load failed", e);
+    card.style.display="block";
+    wrap.innerHTML = `<div class="muted">تعذّر تحميل الطلبات — قد يحتاج فهرس Firestore</div>`;
+  }
+}
+async function decideLeave(leaveId, status){
+  await updateDoc(doc(db, COL_LEAVE, leaveId), { status, decidedAt: serverTimestamp() });
+  showToast(status==="approved" ? "تمت الموافقة على الإجازة" : "تم رفض الطلب");
+  renderPendingLeaveRequests();
+}
 function renderEmployeeList(){
   const wrap = $("#empList");
   if(employeesCache.length===0){
@@ -819,6 +1064,13 @@ function openEmployeeModal(empId){
         <div class="field"><label>نهاية الدوام</label><input id="mEmpEnd" type="time" value="${emp?.workEnd||"17:00"}"></div>
       </div>
       <div class="field">
+        <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="mEmpFridayDiff" style="width:auto;" ${emp?.fridayStart?"checked":""}> دوام يوم الجمعة مختلف</label>
+      </div>
+      <div class="row ${emp?.fridayStart?"":"hidden"}" id="mEmpFridayRow">
+        <div class="field"><label>بداية دوام الجمعة</label><input id="mEmpFridayStart" type="time" value="${emp?.fridayStart||"10:00"}"></div>
+        <div class="field"><label>نهاية دوام الجمعة</label><input id="mEmpFridayEnd" type="time" value="${emp?.fridayEnd||"14:00"}"></div>
+      </div>
+      <div class="field">
         <label>أيام الدوام</label>
         <div class="days-grid" id="mEmpDays">
           ${DAY_SHORT.map((d,i)=>`<div class="chip-check ${workDays.includes(i)?"on":""}" data-day="${i}">${d}</div>`).join("")}
@@ -837,6 +1089,9 @@ function openEmployeeModal(empId){
     </div>
   </div>`;
   $("#modalRoot").innerHTML = modal;
+  $("#mEmpFridayDiff").addEventListener("change", (e)=>{
+    $("#mEmpFridayRow").classList.toggle("hidden", !e.target.checked);
+  });
   $all("#mEmpDays .chip-check").forEach(c=> c.addEventListener("click", ()=> c.classList.toggle("on")));
   $("#btnCloseEmpModal").addEventListener("click", closeModal);
   $("#btnSaveEmp").addEventListener("click", ()=> saveEmployee(empId));
@@ -889,6 +1144,9 @@ async function saveEmployee(empId){
   const storeId = $("#mEmpStore").value;
   const workStart = $("#mEmpStart").value;
   const workEnd = $("#mEmpEnd").value;
+  const fridayDiff = $("#mEmpFridayDiff").checked;
+  const fridayStart = fridayDiff ? $("#mEmpFridayStart").value : null;
+  const fridayEnd = fridayDiff ? $("#mEmpFridayEnd").value : null;
   const workDays = $all("#mEmpDays .chip-check.on").map(c=>Number(c.dataset.day));
   const lateTiers = readTierRows().filter(t=>t.minutes>0).sort((a,b)=>a.minutes-b.minutes);
   const payrollStartDate = $("#mEmpPayrollStart").value || dateStr(new Date());
@@ -896,7 +1154,7 @@ async function saveEmployee(empId){
   const dupCode = employeesCache.find(e=> e.code===code && e.id!==empId);
   if(dupCode){ showToast("هذا الرمز مستخدم لموظف آخر"); return; }
 
-  const data = { name, code, weeklySalary:salary, storeId, workStart, workEnd, workDays, lateTiers, payrollStartDate };
+  const data = { name, code, weeklySalary:salary, storeId, workStart, workEnd, fridayStart, fridayEnd, workDays, lateTiers, payrollStartDate };
   const activeEl = $("#mEmpActive");
   if(activeEl) data.active = activeEl.checked;
 
@@ -1062,11 +1320,7 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
   const effectiveEnd = rangeEndDate < today ? rangeEndDate : today;
 
   const workDays = emp.workDays || [];
-  const startMin = minutesFromHHMM(emp.workStart);
-  const endMin = minutesFromHHMM(emp.workEnd);
-  const dailyHours = (startMin!=null && endMin!=null) ? Math.max(0,(endMin-startMin)/60) : 0;
-  const scheduledDaysInWeekBase = 7; // used only to derive an hourly rate proxy for absence deduction
-  const hourlyRate = dailyHours>0 ? (emp.weeklySalary||0) / (dailyHours * (workDays.length||6)) : 0;
+  const hourlyRate = weeklyScheduledHours(emp)>0 ? (emp.weeklySalary||0) / weeklyScheduledHours(emp) : 0;
 
   const attSnap = await getDocs(query(collection(db,COL_ATT), where("employeeId","==",emp.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
   const attByDate = {};
@@ -1076,29 +1330,43 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
   const manualEntries = dedSnap.docs.map(d=>d.data());
   const manualDeduction = manualEntries.reduce((s,v)=>s+v.amount,0);
 
-  let autoDeduction = 0, absentDays = 0, lateDays = 0;
+  let approvedLeaveDates = new Set();
+  try{
+    const leaveSnap = await getDocs(query(collection(db,COL_LEAVE), where("employeeId","==",emp.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
+    leaveSnap.docs.forEach(d=>{ if(d.data().status==="approved") approvedLeaveDates.add(d.data().date); });
+  }catch(e){ console.error("leave query failed", e); }
+
+  let autoDeduction = 0, absentDays = 0, lateDays = 0, leaveDays = 0;
   const dayDetails = [];
   let cur = new Date(rangeStartDate);
   while(cur <= effectiveEnd){
     if(workDays.includes(cur.getDay())){
-      const rec = attByDate[dateStr(cur)];
-      if(!rec || !rec.checkInTime){
-        const amt = dailyHours * hourlyRate;
-        autoDeduction += amt;
-        absentDays++;
-        dayDetails.push({ date:dateStr(cur), type:"absent", amount:amt });
+      const dStr = dateStr(cur);
+      const sched = getScheduleForDate(emp, cur);
+      const dailyHours = hoursBetween(sched.start, sched.end);
+      if(approvedLeaveDates.has(dStr)){
+        leaveDays++;
+        dayDetails.push({ date:dStr, type:"leave", amount:0 });
       } else {
-        const lateMin = rec.lateMinutes||0;
-        const earlyMin = rec.earlyMinutes||0;
-        const amt = deductionForMinutes(emp.lateTiers, lateMin) + deductionForMinutes(emp.lateTiers, earlyMin);
-        if(amt>0) lateDays++;
-        autoDeduction += amt;
-        if(amt>0) dayDetails.push({ date:dateStr(cur), type:"late", lateMin, earlyMin, amount:amt });
+        const rec = attByDate[dStr];
+        if(!rec || !rec.checkInTime){
+          const amt = dailyHours * hourlyRate;
+          autoDeduction += amt;
+          absentDays++;
+          dayDetails.push({ date:dStr, type:"absent", amount:amt });
+        } else {
+          const lateMin = rec.lateMinutes||0;
+          const earlyMin = rec.earlyMinutes||0;
+          const amt = deductionForMinutes(emp.lateTiers, lateMin) + deductionForMinutes(emp.lateTiers, earlyMin);
+          if(amt>0) lateDays++;
+          autoDeduction += amt;
+          if(amt>0) dayDetails.push({ date:dStr, type:"late", lateMin, earlyMin, amount:amt });
+        }
       }
     }
     cur = addDays(cur,1);
   }
-  return { autoDeduction, manualDeduction, manualEntries, absentDays, lateDays, dayDetails, weeklySalary: emp.weeklySalary||0 };
+  return { autoDeduction, manualDeduction, manualEntries, absentDays, lateDays, leaveDays, dayDetails, weeklySalary: emp.weeklySalary||0 };
 }
 async function computeWeeklyBreakdown(emp, weekStartDate){
   const b = await computeBreakdownForRange(emp, weekStartDate, addDays(weekStartDate,6));
@@ -1236,9 +1504,12 @@ async function runStatement(){
   const rangeStartStr = dateStr(rangeStart), rangeEndStr = dateStr(rangeEnd);
   const targets = empSel==="all" ? employeesCache.filter(e=>e.active!==false) : employeesCache.filter(e=>e.id===empSel);
   const wrap = $("#statementResult");
+  const calWrap = $("#statementCalendar");
   wrap.innerHTML = `<div class="spinner"></div>`;
+  calWrap.innerHTML = "";
 
   let html = "";
+  let waText = `*كشف حساب البسفور*\nالفترة: ${fmtDateShort(rangeStart)} – ${fmtDateShort(rangeEnd)}\n`;
   for(const e of targets){
     const b = await computeBreakdownForRange(e, rangeStart, rangeEnd);
     const fridaysInRange = countFridaysInRange(rangeStart, rangeEnd);
@@ -1248,10 +1519,11 @@ async function runStatement(){
     const paidInRange = payments.reduce((s,v)=>s+v.amount,0);
     const netChange = credited - b.autoDeduction - b.manualDeduction - paidInRange;
 
-    const dayRows = b.dayDetails.map(d=> d.type==="absent"
-      ? `<tr><td>${d.date}</td><td>غياب</td><td>${money(d.amount)}</td></tr>`
-      : `<tr><td>${d.date}</td><td>${d.lateMin>0?`تأخير ${d.lateMin}د `:""}${d.earlyMin>0?`مبكر ${d.earlyMin}د`:""}</td><td>${money(d.amount)}</td></tr>`
-    ).join("");
+    const dayRows = b.dayDetails.map(d=>{
+      if(d.type==="absent") return `<tr><td>${d.date}</td><td>غياب</td><td>${money(d.amount)}</td></tr>`;
+      if(d.type==="leave") return `<tr><td>${d.date}</td><td>إجازة معتمدة</td><td>0</td></tr>`;
+      return `<tr><td>${d.date}</td><td>${d.lateMin>0?`تأخير ${d.lateMin}د `:""}${d.earlyMin>0?`مبكر ${d.earlyMin}د`:""}</td><td>${money(d.amount)}</td></tr>`;
+    }).join("");
     const manualRows = b.manualEntries.map(m=>`<tr><td>${m.date}</td><td>${m.reason||"استقطاع يدوي"}</td><td>${money(m.amount)}</td></tr>`).join("");
     const payRows = payments.map(p=>`<tr><td>${p.date}</td><td>${p.note||"تسليم راتب"}</td><td style="color:var(--green);">${money(p.amount)}</td></tr>`).join("");
 
@@ -1263,18 +1535,73 @@ async function runStatement(){
       </table>
       ${(dayRows||manualRows||payRows) ? `<div class="stitch"></div><table>${dayRows}${manualRows}${payRows}</table>` : ""}
     </div>`;
+
+    waText += `\n👤 ${e.name}\nرواتب مستحقة: ${money(credited)} د.ع\nاستقطاعات: ${money(b.autoDeduction+b.manualDeduction)} د.ع\nمدفوعات: ${money(paidInRange)} د.ع\nصافي التغيّر: ${money(netChange)} د.ع\n`;
+
+    if(period==="month" && empSel!=="all"){
+      calWrap.innerHTML = renderMonthCalendar(rangeStart, b.dayDetails);
+    }
   }
   wrap.innerHTML = html || `<div class="empty-state">لا توجد بيانات لهذه الفترة</div>`;
+  lastStatementText = waText;
+  $("#btnShareWhatsapp").style.display = targets.length ? "block" : "none";
 }
+let lastStatementText = "";
+function shareStatementToWhatsapp(){
+  if(!lastStatementText) return;
+  const url = "https://wa.me/?text=" + encodeURIComponent(lastStatementText);
+  window.open(url, "_blank");
+}
+function renderMonthCalendar(monthStartDate, dayDetails){
+  const detailByDate = {};
+  dayDetails.forEach(d=> detailByDate[d.date] = d);
+  const year = monthStartDate.getFullYear(), month = monthStartDate.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month+1, 0);
+  const leadingBlanks = firstDay.getDay(); // 0=Sun
+  let cells = "";
+  for(let i=0;i<leadingBlanks;i++) cells += `<div></div>`;
+  for(let d=1; d<=lastDay.getDate(); d++){
+    const dt = new Date(year, month, d);
+    const dStr = dateStr(dt);
+    const info = detailByDate[dStr];
+    let bg = "var(--line)", color = "var(--muted)";
+    if(info){
+      if(info.type==="absent"){ bg="var(--red-tint)"; color="var(--red)"; }
+      else if(info.type==="late"){ bg="var(--gold-tint)"; color="var(--gold)"; }
+      else if(info.type==="leave"){ bg="#DDE8F5"; color="#3B6FA0"; }
+    } else if(dt <= new Date()){
+      bg = "var(--green-tint)"; color="var(--green)";
+    }
+    cells += `<div style="aspect-ratio:1;border-radius:8px;background:${bg};color:${color};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">${d}</div>`;
+  }
+  return `<div class="card">
+    <h3>التقويم الشهري</h3>
+    <div class="days-grid" style="grid-template-columns:repeat(7,1fr);margin-bottom:8px;">
+      ${DAY_SHORT.map(d=>`<div class="muted center" style="font-size:11px;">${d}</div>`).join("")}
+    </div>
+    <div class="days-grid" style="grid-template-columns:repeat(7,1fr);">${cells}</div>
+    <div class="stitch"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--green-tint);border:1px solid var(--green);"></span> حاضر</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--gold-tint);border:1px solid var(--gold);"></span> تأخير</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--red-tint);border:1px solid var(--red);"></span> غياب</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#DDE8F5;border:1px solid #3B6FA0;"></span> إجازة</span>
+    </div>
+  </div>`;
+}
+
 
 /* ---------------- EVENT WIRING (Safari-safe: addEventListener, no inline onclick) ---------------- */
 $all(".pin-key[data-k]").forEach(k=> k.addEventListener("click", ()=> handlePinDigit(k.dataset.k)));
 $("#btnBackspace").addEventListener("click", ()=>{ pinBuffer = pinBuffer.slice(0,-1); renderPinDots(); });
 
 $("#btnCheckAction").addEventListener("click", handleCheckAction);
+$("#btnRequestLeave").addEventListener("click", openLeaveRequestModal);
 $("#btnEmpLogout").addEventListener("click", ()=>{
   currentEmployee = null;
   if(empClockInterval) clearInterval(empClockInterval);
+  if(spotCheckUnsub){ spotCheckUnsub(); spotCheckUnsub = null; }
   $("#screen-employee").classList.add("hidden");
   $("#screen-login").classList.remove("hidden");
   resetPin();
@@ -1295,6 +1622,7 @@ $all(".chip-check[data-period]").forEach(c=> c.addEventListener("click", ()=>{
   $("#stmtCustomRange").classList.toggle("hidden", c.dataset.period!=="custom");
 }));
 $("#btnRunStatement").addEventListener("click", runStatement);
+$("#btnShareWhatsapp").addEventListener("click", shareStatementToWhatsapp);
 
 /* ---------------- BOOT ---------------- */
 (async function boot(){
