@@ -353,6 +353,7 @@ const COL_DED = "hr_deductions";
 const COL_PAY = "hr_payments";
 const COL_LEAVE = "hr_leaves";
 const COL_SPOT = "hr_spotchecks";
+const COL_ADJ = "hr_balance_adjustments";
 const COL_CFG = "hr_config";
 
 const DAY_NAMES = ["الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
@@ -1389,8 +1390,10 @@ async function computeEmployeeBalance(emp){
   const breakdown = await computeBreakdownForRange(emp, start, today);
   const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",emp.id)));
   const totalPaid = paySnap.docs.reduce((s,d)=> s + (d.data().amount||0), 0);
-  const balance = totalCredited - breakdown.autoDeduction - breakdown.manualDeduction - totalPaid;
-  return { fridayCount, totalCredited, autoDeduction: breakdown.autoDeduction, manualDeduction: breakdown.manualDeduction, totalPaid, balance };
+  const adjSnap = await getDocs(query(collection(db,COL_ADJ), where("employeeId","==",emp.id)));
+  const totalAdjustments = adjSnap.docs.reduce((s,d)=> s + (d.data().amount||0), 0);
+  const balance = totalCredited - breakdown.autoDeduction - breakdown.manualDeduction - totalPaid + totalAdjustments;
+  return { fridayCount, totalCredited, autoDeduction: breakdown.autoDeduction, manualDeduction: breakdown.manualDeduction, totalPaid, totalAdjustments, balance };
 }
 
 /* ---- Payroll tab: live balances + settle button ---- */
@@ -1427,11 +1430,15 @@ async function renderPayrollBalances(){
         <span class="muted">الرصيد المستحق حالياً</span>
         <span class="big-num" style="font-size:22px;color:${b.balance>0?"var(--green)":"var(--muted)"};">${money(b.balance)} د.ع</span>
       </div>
-      <button class="btn btn-primary btn-sm" style="width:100%;" data-settle="${e.id}" ${b.balance<=0?"disabled":""}>تسليم الراتب</button>
+      <button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px;" data-settle="${e.id}" ${b.balance<=0?"disabled":""}>تسليم الراتب</button>
+      <div class="row">
+        <button class="btn btn-outline btn-sm" style="width:100%;" data-history="${e.id}">📜 السجل والتعديل</button>
+      </div>
     </div>`;
   }
   wrap.innerHTML = rows;
   $all("[data-settle]").forEach(b=> b.addEventListener("click", ()=> openSettleModal(b.dataset.settle)));
+  $all("[data-history]").forEach(b=> b.addEventListener("click", ()=> openHistoryModal(b.dataset.history)));
 }
 
 function openSettleModal(empId){
@@ -1470,6 +1477,89 @@ async function savePayment(emp, currentBalance){
   closeModal();
   showToast("تم تسجيل التسليم");
   renderPayrollBalances();
+}
+
+/* ---- History + manual balance correction ---- */
+async function openHistoryModal(empId){
+  const emp = employeesCache.find(e=>e.id===empId);
+  const modal = `
+  <div class="modal-bg" id="historyModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>السجل والتعديل — ${emp.name}</h3>
+      <button class="btn btn-gold" id="btnOpenAdjustModal" style="margin-bottom:14px;">➕➖ تعديل رصيد يدوي</button>
+      <h3 style="font-size:14px;">مدفوعات سابقة</h3>
+      <div id="histPayList" style="margin-bottom:16px;"><div class="spinner"></div></div>
+      <h3 style="font-size:14px;">تعديلات يدوية</h3>
+      <div id="histAdjList"><div class="spinner"></div></div>
+      <button class="link-btn" id="btnCloseHistoryModal" style="width:100%;margin-top:14px;">إغلاق</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCloseHistoryModal").addEventListener("click", closeModal);
+  $("#btnOpenAdjustModal").addEventListener("click", ()=> openAdjustModal(emp));
+  loadHistoryLists(emp);
+}
+async function loadHistoryLists(emp){
+  const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",emp.id)));
+  const payments = paySnap.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=> b.date.localeCompare(a.date));
+  const payWrap = $("#histPayList");
+  payWrap.innerHTML = payments.length===0 ? `<div class="muted" style="font-size:13px;">لا توجد مدفوعات مسجّلة</div>` : payments.map(p=>`
+    <div class="employee-row">
+      <div><div>${p.date} — ${p.note||""}</div><span class="pill pill-green">${money(p.amount)} د.ع</span></div>
+      <button class="icon-btn" data-del-pay="${p.id}">🗑️</button>
+    </div>`).join("");
+  $all("[data-del-pay]").forEach(b=> b.addEventListener("click", async ()=>{
+    if(!confirm("حذف عملية التسليم هذي؟ الرصيد راح يرجع.")) return;
+    await deleteDoc(doc(db, COL_PAY, b.dataset.delPay));
+    showToast("تم الحذف، الرصيد رجع");
+    loadHistoryLists(emp);
+    renderPayrollBalances();
+  }));
+
+  const adjSnap = await getDocs(query(collection(db,COL_ADJ), where("employeeId","==",emp.id)));
+  const adjs = adjSnap.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=> b.date.localeCompare(a.date));
+  const adjWrap = $("#histAdjList");
+  adjWrap.innerHTML = adjs.length===0 ? `<div class="muted" style="font-size:13px;">لا توجد تعديلات يدوية</div>` : adjs.map(a=>`
+    <div class="employee-row">
+      <div><div>${a.date} — ${a.note||""}</div><span class="pill ${a.amount>=0?"pill-green":"pill-red"}">${a.amount>=0?"+":""}${money(a.amount)} د.ع</span></div>
+      <button class="icon-btn" data-del-adj="${a.id}">🗑️</button>
+    </div>`).join("");
+  $all("[data-del-adj]").forEach(b=> b.addEventListener("click", async ()=>{
+    if(!confirm("حذف هذا التعديل؟")) return;
+    await deleteDoc(doc(db, COL_ADJ, b.dataset.delAdj));
+    showToast("تم الحذف");
+    loadHistoryLists(emp);
+    renderPayrollBalances();
+  }));
+}
+function openAdjustModal(emp){
+  const modal = `
+  <div class="modal-bg" id="adjustModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>تعديل رصيد يدوي — ${emp.name}</h3>
+      <p class="muted" style="font-size:12px;">اكتب مبلغ موجب لإضافة للرصيد (تصحيح استقطاع غلط مثلاً)، أو مبلغ سالب لإنقاصه.</p>
+      <div class="field"><label>المبلغ (استخدم إشارة − للإنقاص، مثال: -5000)</label><input id="mAdjAmount" type="number" placeholder="5000 أو -5000"></div>
+      <div class="field"><label>السبب</label><input id="mAdjNote" placeholder="مثال: تصحيح استقطاع غلط"></div>
+      <button class="btn btn-primary" id="btnSaveAdjust">حفظ التعديل</button>
+      <button class="link-btn" id="btnCloseAdjustModal" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCloseAdjustModal").addEventListener("click", ()=> openHistoryModal(emp.id));
+  $("#btnSaveAdjust").addEventListener("click", async ()=>{
+    const amount = Number($("#mAdjAmount").value);
+    const note = $("#mAdjNote").value.trim();
+    if(!amount){ showToast("أدخل مبلغ صحيح (غير صفر)"); return; }
+    await addDoc(collection(db, COL_ADJ), {
+      employeeId: emp.id, employeeName: emp.name, amount, note,
+      date: dateStr(new Date()), createdAt: serverTimestamp()
+    });
+    showToast("تم حفظ التعديل");
+    renderPayrollBalances();
+    openHistoryModal(emp.id);
+  });
 }
 
 /* ---- Statements tab ---- */
