@@ -301,7 +301,7 @@
             <div class="field"><label>إلى</label><input type="date" id="stmtTo"></div>
           </div>
           <button class="btn btn-primary" id="btnRunStatement">عرض الكشف</button>
-          <button class="btn btn-outline" id="btnShareWhatsapp" style="margin-top:10px;display:none;">📤 مشاركة عبر واتساب</button>
+          <button class="btn btn-outline" id="btnShareWhatsapp" style="margin-top:10px;display:none;">📤 مشاركة PDF عبر واتساب</button>
         </div>
         <div id="statementCalendar"></div>
         <div id="statementResult"></div>
@@ -1597,50 +1597,100 @@ async function runStatement(){
   const calWrap = $("#statementCalendar");
   wrap.innerHTML = `<div class="spinner"></div>`;
   calWrap.innerHTML = "";
+  $("#btnShareWhatsapp").style.display = "none";
 
-  let html = "";
-  let waText = `*كشف حساب البسفور*\nالفترة: ${fmtDateShort(rangeStart)} – ${fmtDateShort(rangeEnd)}\n`;
-  for(const e of targets){
-    const b = await computeBreakdownForRange(e, rangeStart, rangeEnd);
-    const fridaysInRange = countFridaysInRange(rangeStart, rangeEnd);
-    const credited = fridaysInRange * (e.weeklySalary||0);
-    const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",e.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
-    const payments = paySnap.docs.map(d=>d.data());
-    const paidInRange = payments.reduce((s,v)=>s+v.amount,0);
-    const netChange = credited - b.autoDeduction - b.manualDeduction - paidInRange;
+  try{
+    let html = "";
+    let waText = `*كشف حساب البسفور*\nالفترة: ${fmtDateShort(rangeStart)} – ${fmtDateShort(rangeEnd)}\n`;
+    for(const e of targets){
+      const b = await computeBreakdownForRange(e, rangeStart, rangeEnd);
+      const fridaysInRange = countFridaysInRange(rangeStart, rangeEnd);
+      const credited = fridaysInRange * (e.weeklySalary||0);
+      const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",e.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
+      const payments = paySnap.docs.map(d=>d.data());
+      const paidInRange = payments.reduce((s,v)=>s+v.amount,0);
+      const netChange = credited - b.autoDeduction - b.manualDeduction - paidInRange;
 
-    const dayRows = b.dayDetails.map(d=>{
-      if(d.type==="absent") return `<tr><td>${d.date}</td><td>غياب</td><td>${money(d.amount)}</td></tr>`;
-      if(d.type==="leave") return `<tr><td>${d.date}</td><td>إجازة معتمدة</td><td>0</td></tr>`;
-      return `<tr><td>${d.date}</td><td>${d.lateMin>0?`تأخير ${d.lateMin}د `:""}${d.earlyMin>0?`مبكر ${d.earlyMin}د`:""}</td><td>${money(d.amount)}</td></tr>`;
-    }).join("");
-    const manualRows = b.manualEntries.map(m=>`<tr><td>${m.date}</td><td>${m.reason||"استقطاع يدوي"}</td><td>${money(m.amount)}</td></tr>`).join("");
-    const payRows = payments.map(p=>`<tr><td>${p.date}</td><td>${p.note||"تسليم راتب"}</td><td style="color:var(--green);">${money(p.amount)}</td></tr>`).join("");
+      const dayRows = b.dayDetails.map(d=>{
+        if(d.type==="absent") return `<tr><td>${d.date}</td><td>غياب</td><td>${money(d.amount)}</td></tr>`;
+        if(d.type==="leave") return `<tr><td>${d.date}</td><td>إجازة معتمدة</td><td>0</td></tr>`;
+        return `<tr><td>${d.date}</td><td>${d.lateMin>0?`تأخير ${d.lateMin}د `:""}${d.earlyMin>0?`مبكر ${d.earlyMin}د`:""}</td><td>${money(d.amount)}</td></tr>`;
+      }).join("");
+      const manualRows = b.manualEntries.map(m=>`<tr><td>${m.date}</td><td>${m.reason||"استقطاع يدوي"}</td><td>${money(m.amount)}</td></tr>`).join("");
+      const payRows = payments.map(p=>`<tr><td>${p.date}</td><td>${p.note||"تسليم راتب"}</td><td style="color:var(--green);">${money(p.amount)}</td></tr>`).join("");
 
-    html += `<div class="card" style="margin-bottom:10px;">
-      <div style="font-weight:800;margin-bottom:8px;">${e.name} <span class="muted" style="font-weight:500;font-size:12px;">(${fmtDateShort(rangeStart)}–${fmtDateShort(rangeEnd)})</span></div>
-      <table>
-        <tr><th>رواتب مستحقة</th><th>استقطاعات</th><th>مدفوعات</th><th>صافي التغيّر</th></tr>
-        <tr><td>${money(credited)}</td><td>${money(b.autoDeduction+b.manualDeduction)}</td><td>${money(paidInRange)}</td><td style="font-weight:800;">${money(netChange)}</td></tr>
-      </table>
-      ${(dayRows||manualRows||payRows) ? `<div class="stitch"></div><table>${dayRows}${manualRows}${payRows}</table>` : ""}
-    </div>`;
+      html += `<div class="card" style="margin-bottom:10px;">
+        <div style="font-weight:800;margin-bottom:8px;">${e.name} <span class="muted" style="font-weight:500;font-size:12px;">(${fmtDateShort(rangeStart)}–${fmtDateShort(rangeEnd)})</span></div>
+        <table>
+          <tr><th>رواتب مستحقة</th><th>استقطاعات</th><th>مدفوعات</th><th>صافي التغيّر</th></tr>
+          <tr><td>${money(credited)}</td><td>${money(b.autoDeduction+b.manualDeduction)}</td><td>${money(paidInRange)}</td><td style="font-weight:800;">${money(netChange)}</td></tr>
+        </table>
+        ${(dayRows||manualRows||payRows) ? `<div class="stitch"></div><table>${dayRows}${manualRows}${payRows}</table>` : ""}
+      </div>`;
 
-    waText += `\n👤 ${e.name}\nرواتب مستحقة: ${money(credited)} د.ع\nاستقطاعات: ${money(b.autoDeduction+b.manualDeduction)} د.ع\nمدفوعات: ${money(paidInRange)} د.ع\nصافي التغيّر: ${money(netChange)} د.ع\n`;
+      waText += `\n👤 ${e.name}\nرواتب مستحقة: ${money(credited)} د.ع\nاستقطاعات: ${money(b.autoDeduction+b.manualDeduction)} د.ع\nمدفوعات: ${money(paidInRange)} د.ع\nصافي التغيّر: ${money(netChange)} د.ع\n`;
 
-    if(period==="month" && empSel!=="all"){
-      calWrap.innerHTML = renderMonthCalendar(rangeStart, b.dayDetails);
+      if(period==="month" && empSel!=="all"){
+        calWrap.innerHTML = renderMonthCalendar(rangeStart, b.dayDetails);
+      }
     }
+    wrap.innerHTML = html || `<div class="empty-state">لا توجد بيانات لهذه الفترة</div>`;
+    lastStatementHtml = html;
+    lastStatementTitle = `كشف حساب البسفور — ${fmtDateShort(rangeStart)} إلى ${fmtDateShort(rangeEnd)}`;
+  }catch(err){
+    console.error("runStatement failed", err);
+    wrap.innerHTML = `<div class="muted center" style="padding:14px;">تعذّر تحميل الكشف — قد يحتاج فهرس Firestore لمجموعة hr_payments (راجع الكونسول للرابط).</div>`;
+    return;
   }
-  wrap.innerHTML = html || `<div class="empty-state">لا توجد بيانات لهذه الفترة</div>`;
-  lastStatementText = waText;
   $("#btnShareWhatsapp").style.display = targets.length ? "block" : "none";
 }
-let lastStatementText = "";
-function shareStatementToWhatsapp(){
-  if(!lastStatementText) return;
-  const url = "https://wa.me/?text=" + encodeURIComponent(lastStatementText);
-  window.open(url, "_blank");
+let lastStatementHtml = "", lastStatementTitle = "";
+
+/* ---- PDF generation + share ---- */
+let html2pdfLoaded = false;
+async function ensureHtml2PdfReady(onStatus){
+  if(html2pdfLoaded) return;
+  onStatus && onStatus("جارِ تجهيز مولّد PDF...");
+  await loadScriptTag("https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js");
+  html2pdfLoaded = true;
+}
+async function shareStatementToWhatsapp(){
+  if(!lastStatementHtml){ showToast("سوي عرض الكشف أول"); return; }
+  const btn = $("#btnShareWhatsapp");
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "جارِ تجهيز PDF...";
+  try{
+    await ensureHtml2PdfReady(msg=> btn.textContent = msg);
+    const printDiv = document.createElement("div");
+    printDiv.style.cssText = "direction:rtl;font-family:Tajawal,sans-serif;padding:16px;background:#fff;color:#222;width:700px;";
+    printDiv.innerHTML = `<h2 style="font-family:Cairo,sans-serif;color:#7A2F41;margin-bottom:4px;">${lastStatementTitle}</h2>
+      <div style="margin-bottom:14px;color:#888;font-size:13px;">نظام حضور البسفور</div>
+      ${lastStatementHtml.replace(/class="card"/g,'style="border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:10px;"').replace(/class="stitch"/g,'style="height:1px;background:#eee;margin:10px 0;"')}`;
+    document.body.appendChild(printDiv);
+
+    const opt = { margin:10, filename:"كشف_حساب_البسفور.pdf", image:{type:"jpeg",quality:0.95}, html2canvas:{scale:2}, jsPDF:{unit:"mm",format:"a4",orientation:"portrait"} };
+    const blob = await html2pdf().set(opt).from(printDiv).outputPdf("blob");
+    document.body.removeChild(printDiv);
+
+    const file = new File([blob], "كشف_حساب_البسفور.pdf", { type:"application/pdf" });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){
+      await navigator.share({ files:[file], title: lastStatementTitle, text: "كشف حساب البسفور" });
+    } else {
+      // Fallback: download the PDF, then open WhatsApp with a text message
+      const dlUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = dlUrl; a.download = "كشف_حساب_البسفور.pdf";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      showToast("تم تحميل PDF — أرفقه يدوياً بواتساب");
+      window.open("https://wa.me/?text=" + encodeURIComponent(lastStatementTitle + " — مرفق PDF محمّل على جهازك"), "_blank");
+    }
+  }catch(e){
+    console.error("PDF share failed", e);
+    showToast("تعذّر إنشاء الـ PDF");
+  }
+  btn.disabled = false;
+  btn.textContent = originalText;
 }
 function renderMonthCalendar(monthStartDate, dayDetails){
   const detailByDate = {};
