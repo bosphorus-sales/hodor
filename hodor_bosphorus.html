@@ -1340,6 +1340,9 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
   let autoDeduction = 0, absentDays = 0, lateDays = 0, leaveDays = 0;
   const dayDetails = [];
   let cur = new Date(rangeStartDate);
+  const now = new Date();
+  const todayStr = dateStr(now);
+  const nowMin = now.getHours()*60 + now.getMinutes();
   while(cur <= effectiveEnd){
     if(workDays.includes(cur.getDay())){
       const dStr = dateStr(cur);
@@ -1351,10 +1354,16 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
       } else {
         const rec = attByDate[dStr];
         if(!rec || !rec.checkInTime){
-          const amt = dailyHours * hourlyRate;
-          autoDeduction += amt;
-          absentDays++;
-          dayDetails.push({ date:dStr, type:"absent", amount:amt });
+          // don't judge today as absent until the shift's scheduled end time has actually passed
+          const isToday = dStr === todayStr;
+          const shiftEndMin = minutesFromHHMM(sched.end);
+          const shiftOver = !isToday || (shiftEndMin!=null && nowMin >= shiftEndMin);
+          if(shiftOver){
+            const amt = dailyHours * hourlyRate;
+            autoDeduction += amt;
+            absentDays++;
+            dayDetails.push({ date:dStr, type:"absent", amount:amt });
+          }
         } else {
           const lateMin = rec.lateMinutes||0;
           const earlyMin = rec.earlyMinutes||0;
