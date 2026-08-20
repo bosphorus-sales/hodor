@@ -1497,6 +1497,8 @@ async function openHistoryModal(empId){
       <div class="modal-handle"></div>
       <h3>السجل والتعديل — ${emp.name}</h3>
       <button class="btn btn-gold" id="btnOpenAdjustModal" style="margin-bottom:14px;">➕➖ تعديل رصيد يدوي</button>
+      <h3 style="font-size:14px;">سجل الحركات (استقطاعات)</h3>
+      <div id="histMovementsList" style="margin-bottom:16px;"><div class="spinner"></div></div>
       <h3 style="font-size:14px;">مدفوعات سابقة</h3>
       <div id="histPayList" style="margin-bottom:16px;"><div class="spinner"></div></div>
       <h3 style="font-size:14px;">تعديلات يدوية</h3>
@@ -1508,6 +1510,146 @@ async function openHistoryModal(empId){
   $("#btnCloseHistoryModal").addEventListener("click", closeModal);
   $("#btnOpenAdjustModal").addEventListener("click", ()=> openAdjustModal(emp));
   loadHistoryLists(emp);
+  loadMovements(emp);
+}
+async function loadMovements(emp){
+  const wrap = $("#histMovementsList");
+  wrap.innerHTML = `<div class="spinner"></div>`;
+  try{
+    const start = emp.payrollStartDate ? new Date(emp.payrollStartDate+"T00:00:00") : new Date();
+    const today = new Date(); today.setHours(0,0,0,0);
+    const b = await computeBreakdownForRange(emp, start, today);
+
+    const dedSnap = await getDocs(query(collection(db,COL_DED), where("employeeId","==",emp.id)));
+    const manualDeds = dedSnap.docs.map(d=>({id:d.id, source:"manual", ...d.data()}));
+    const autoRows = b.dayDetails.filter(d=>d.type!=="leave").map(d=>({source:"auto", ...d}));
+    const all = [...autoRows, ...manualDeds].sort((a,b2)=> b2.date.localeCompare(a.date));
+
+    if(all.length===0){ wrap.innerHTML = `<div class="muted" style="font-size:13px;">لا توجد استقطاعات مسجّلة</div>`; return; }
+
+    wrap.innerHTML = all.map((row,i)=>{
+      let label;
+      if(row.source==="manual") label = row.reason || "استقطاع يدوي";
+      else if(row.type==="absent") label = "غياب";
+      else label = `${row.lateMin>0?`تأخير ${row.lateMin}د `:""}${row.earlyMin>0?`مبكر ${row.earlyMin}د`:""}`.trim();
+      const editAttr = row.source==="manual" ? `data-edit-ded="${row.id}"` : `data-edit-att="${row.date}"`;
+      const delAttr = row.source==="manual" ? `data-del-ded2="${row.id}"` : (row.type==="absent" ? `data-forgive-absent="${row.date}"` : `data-forgive-late="${row.date}"`);
+      return `<div class="employee-row" style="flex-wrap:wrap;">
+        <div><div>${row.date} — ${label}</div><span class="pill pill-red">${money(row.amount)} د.ع</span></div>
+        <div style="display:flex;gap:6px;">
+          <button class="icon-btn" ${editAttr}>✏️</button>
+          <button class="icon-btn" ${delAttr}>🗑️</button>
+        </div>
+      </div>`;
+    }).join("");
+
+    $all("[data-edit-ded]").forEach(btn=> btn.addEventListener("click", ()=> openEditManualDeduction(emp, btn.dataset.editDed)));
+    $all("[data-del-ded2]").forEach(btn=> btn.addEventListener("click", async ()=>{
+      if(!confirm("حذف هذا الاستقطاع؟ الرصيد راح يرجع.")) return;
+      await deleteDoc(doc(db, COL_DED, btn.dataset.delDed2));
+      showToast("تم الحذف، الرصيد رجع");
+      loadMovements(emp); renderPayrollBalances();
+    }));
+    $all("[data-edit-att]").forEach(btn=> btn.addEventListener("click", ()=> openAttendanceEditModal(emp, btn.dataset.editAtt)));
+    $all("[data-forgive-absent]").forEach(btn=> btn.addEventListener("click", async ()=>{
+      if(!confirm("تعليم هذا اليوم حاضر بالكامل وإلغاء استقطاع الغياب؟")) return;
+      await markDayPresent(emp, btn.dataset.forgiveAbsent);
+      showToast("تم إلغاء الاستقطاع، الرصيد رجع");
+      loadMovements(emp); renderPayrollBalances();
+    }));
+    $all("[data-forgive-late]").forEach(btn=> btn.addEventListener("click", async ()=>{
+      if(!confirm("إلغاء استقطاع التأخير/الانصراف المبكر لهذا اليوم؟")) return;
+      await forgiveLateness(emp, btn.dataset.forgiveLate);
+      showToast("تم إلغاء الاستقطاع، الرصيد رجع");
+      loadMovements(emp); renderPayrollBalances();
+    }));
+  }catch(e){
+    console.error("loadMovements failed", e);
+    wrap.innerHTML = `<div class="muted" style="font-size:13px;">تعذّر تحميل سجل الحركات</div>`;
+  }
+}
+async function markDayPresent(emp, dateStr_){
+  const dt = new Date(dateStr_+"T00:00:00");
+  const sched = getScheduleForDate(emp, dt);
+  await setDoc(doc(db, COL_ATT, `${emp.id}_${dateStr_}`), {
+    employeeId: emp.id, employeeName: emp.name, date: dateStr_,
+    checkInTime: sched.start || "00:00", checkOutTime: sched.end || "00:00",
+    lateMinutes: 0, earlyMinutes: 0, adjustedByAdmin: true, createdAt: serverTimestamp()
+  }, { merge:true });
+}
+async function forgiveLateness(emp, dateStr_){
+  await updateDoc(doc(db, COL_ATT, `${emp.id}_${dateStr_}`), {
+    lateMinutes: 0, earlyMinutes: 0, adjustedByAdmin: true
+  });
+}
+function openEditManualDeduction(emp, dedId){
+  const modal = `
+  <div class="modal-bg" id="editDedModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>تعديل استقطاع</h3>
+      <div class="field"><label>المبلغ (د.ع)</label><input id="mEditDedAmount" type="number"></div>
+      <div class="field"><label>السبب</label><input id="mEditDedReason"></div>
+      <button class="btn btn-primary" id="btnSaveEditDed">حفظ</button>
+      <button class="link-btn" id="btnCancelEditDed" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  getDoc(doc(db, COL_DED, dedId)).then(snap=>{
+    const d = snap.data();
+    $("#mEditDedAmount").value = d.amount;
+    $("#mEditDedReason").value = d.reason||"";
+  });
+  $("#btnCancelEditDed").addEventListener("click", ()=> openHistoryModal(emp.id));
+  $("#btnSaveEditDed").addEventListener("click", async ()=>{
+    const amount = Number($("#mEditDedAmount").value)||0;
+    const reason = $("#mEditDedReason").value.trim();
+    if(amount<=0){ showToast("أدخل مبلغ صحيح"); return; }
+    await updateDoc(doc(db, COL_DED, dedId), { amount, reason });
+    showToast("تم التحديث");
+    renderPayrollBalances();
+    openHistoryModal(emp.id);
+  });
+}
+function openAttendanceEditModal(emp, dateStr_){
+  const sched = getScheduleForDate(emp, new Date(dateStr_+"T00:00:00"));
+  const modal = `
+  <div class="modal-bg" id="attEditModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>تعديل حضور يوم ${dateStr_}</h3>
+      <p class="muted" style="font-size:12px;">دوامه المجدول: ${sched.start||"—"} – ${sched.end||"—"}</p>
+      <div class="field"><label>وقت الحضور</label><input id="mAttIn" type="time"></div>
+      <div class="field"><label>وقت الانصراف</label><input id="mAttOut" type="time"></div>
+      <button class="btn btn-primary" id="btnSaveAttEdit">حفظ التعديل</button>
+      <button class="link-btn" id="btnCancelAttEdit" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  getDoc(doc(db, COL_ATT, `${emp.id}_${dateStr_}`)).then(snap=>{
+    const d = snap.exists() ? snap.data() : {};
+    $("#mAttIn").value = d.checkInTime || sched.start || "";
+    $("#mAttOut").value = d.checkOutTime || sched.end || "";
+  });
+  $("#btnCancelAttEdit").addEventListener("click", ()=> openHistoryModal(emp.id));
+  $("#btnSaveAttEdit").addEventListener("click", async ()=>{
+    const inVal = $("#mAttIn").value, outVal = $("#mAttOut").value;
+    let lateMinutes = 0, earlyMinutes = 0;
+    if(inVal && sched.start){
+      lateMinutes = Math.max(0, minutesFromHHMM(inVal) - minutesFromHHMM(sched.start));
+    }
+    if(outVal && sched.end){
+      earlyMinutes = Math.max(0, minutesFromHHMM(sched.end) - minutesFromHHMM(outVal));
+    }
+    await setDoc(doc(db, COL_ATT, `${emp.id}_${dateStr_}`), {
+      employeeId: emp.id, employeeName: emp.name, date: dateStr_,
+      checkInTime: inVal || null, checkOutTime: outVal || null,
+      lateMinutes, earlyMinutes, adjustedByAdmin: true, createdAt: serverTimestamp()
+    }, { merge:true });
+    showToast("تم حفظ التعديل، الرصيد تحدّث");
+    renderPayrollBalances();
+    openHistoryModal(emp.id);
+  });
 }
 async function loadHistoryLists(emp){
   const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",emp.id)));
