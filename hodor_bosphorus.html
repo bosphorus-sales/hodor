@@ -1321,7 +1321,7 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
   const effectiveEnd = rangeEndDate < today ? rangeEndDate : today;
 
   const workDays = emp.workDays || [];
-  const hourlyRate = weeklyScheduledHours(emp)>0 ? (emp.weeklySalary||0) / weeklyScheduledHours(emp) : 0;
+  const dailyRate = (emp.weeklySalary||0) / 7;
 
   const attSnap = await getDocs(query(collection(db,COL_ATT), where("employeeId","==",emp.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
   const attByDate = {};
@@ -1347,7 +1347,6 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
     if(workDays.includes(cur.getDay())){
       const dStr = dateStr(cur);
       const sched = getScheduleForDate(emp, cur);
-      const dailyHours = hoursBetween(sched.start, sched.end);
       if(approvedLeaveDates.has(dStr)){
         leaveDays++;
         dayDetails.push({ date:dStr, type:"leave", amount:0 });
@@ -1359,7 +1358,7 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
           const shiftEndMin = minutesFromHHMM(sched.end);
           const shiftOver = !isToday || (shiftEndMin!=null && nowMin >= shiftEndMin);
           if(shiftOver){
-            const amt = dailyHours * hourlyRate;
+            const amt = dailyRate; // lose that day's full daily wage
             autoDeduction += amt;
             absentDays++;
             dayDetails.push({ date:dStr, type:"absent", amount:amt });
@@ -1391,18 +1390,23 @@ function countFridaysInRange(startDate, endDateInclusive){
   }
   return n;
 }
+function countDaysInclusive(startDate, endDateInclusive){
+  const ms = endDateInclusive.getTime() - startDate.getTime();
+  return Math.max(0, Math.round(ms / 86400000) + 1);
+}
 async function computeEmployeeBalance(emp){
   const start = emp.payrollStartDate ? new Date(emp.payrollStartDate+"T00:00:00") : new Date();
   const today = new Date(); today.setHours(0,0,0,0);
-  const fridayCount = countFridaysInRange(start, today);
-  const totalCredited = fridayCount * (emp.weeklySalary||0);
+  const dailyRate = (emp.weeklySalary||0) / 7;
+  const daysCount = countDaysInclusive(start, today);
+  const totalCredited = daysCount * dailyRate; // salary accrues day by day, every calendar day
   const breakdown = await computeBreakdownForRange(emp, start, today);
   const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",emp.id)));
   const totalPaid = paySnap.docs.reduce((s,d)=> s + (d.data().amount||0), 0);
   const adjSnap = await getDocs(query(collection(db,COL_ADJ), where("employeeId","==",emp.id)));
   const totalAdjustments = adjSnap.docs.reduce((s,d)=> s + (d.data().amount||0), 0);
   const balance = totalCredited - breakdown.autoDeduction - breakdown.manualDeduction - totalPaid + totalAdjustments;
-  return { fridayCount, totalCredited, autoDeduction: breakdown.autoDeduction, manualDeduction: breakdown.manualDeduction, totalPaid, totalAdjustments, balance };
+  return { daysCount, dailyRate, totalCredited, autoDeduction: breakdown.autoDeduction, manualDeduction: breakdown.manualDeduction, totalPaid, totalAdjustments, balance };
 }
 
 /* ---- Payroll tab: live balances + settle button ---- */
@@ -1427,9 +1431,9 @@ async function renderPayrollBalances(){
         <div class="pill pill-gold">${money(e.weeklySalary||0)} د.ع/أسبوع</div>
       </div>
       <table>
-        <tr><th>أسابيع محتسبة</th><th>استقطاعات</th><th>مدفوع سابقاً</th></tr>
+        <tr><th>يومية الموظف</th><th>استقطاعات</th><th>مدفوع سابقاً</th></tr>
         <tr>
-          <td>${b.fridayCount}</td>
+          <td>${money(b.dailyRate)}</td>
           <td>${money(b.autoDeduction+b.manualDeduction)}</td>
           <td>${money(b.totalPaid)}</td>
         </tr>
@@ -1755,8 +1759,8 @@ async function runStatement(){
     let waText = `*كشف حساب البسفور*\nالفترة: ${fmtDateShort(rangeStart)} – ${fmtDateShort(rangeEnd)}\n`;
     for(const e of targets){
       const b = await computeBreakdownForRange(e, rangeStart, rangeEnd);
-      const fridaysInRange = countFridaysInRange(rangeStart, rangeEnd);
-      const credited = fridaysInRange * (e.weeklySalary||0);
+      const daysInRange = countDaysInclusive(rangeStart, rangeEnd);
+      const credited = daysInRange * ((e.weeklySalary||0)/7);
       const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",e.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
       const payments = paySnap.docs.map(d=>d.data());
       const paidInRange = payments.reduce((s,v)=>s+v.amount,0);
