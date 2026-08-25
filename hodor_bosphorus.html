@@ -646,6 +646,7 @@ async function proceedWithAttendance(faceSkipped){
       date: today,
       checkInTime: timeStr(now),
       checkInLoc: lastKnownPosition || null,
+      checkInPhoto: lastCapturedPhoto || null,
       faceVerified: !faceSkipped,
       lateMinutes,
       createdAt: serverTimestamp()
@@ -662,11 +663,13 @@ async function proceedWithAttendance(faceSkipped){
     await updateDoc(ref, {
       checkOutTime: timeStr(now),
       checkOutLoc: lastKnownPosition || null,
+      checkOutPhoto: lastCapturedPhoto || null,
       checkOutFaceVerified: !faceSkipped,
       earlyMinutes
     });
     showToast(faceSkipped ? "تم تسجيل الانصراف بدون تأكيد وجه ⚠️" : "تم تسجيل الانصراف ✅");
   }
+  lastCapturedPhoto = null;
   await refreshEmployeeStatus();
   await renderEmployeeWeekSummary();
 }
@@ -678,7 +681,18 @@ function openLeaveRequestModal(){
     <div class="modal">
       <div class="modal-handle"></div>
       <h3>طلب إجازة</h3>
+      <div class="field">
+        <label>نوع الإجازة</label>
+        <div class="days-grid" style="grid-template-columns:repeat(2,1fr);">
+          <div class="chip-check on" data-leave-type="full">يوم كامل</div>
+          <div class="chip-check" data-leave-type="partial">فترة زمنية</div>
+        </div>
+      </div>
       <div class="field"><label>التاريخ</label><input id="mLeaveDate" type="date" value="${dateStr(new Date())}"></div>
+      <div class="row hidden" id="leaveTimeRow">
+        <div class="field"><label>من الساعة</label><input id="mLeaveFrom" type="time"></div>
+        <div class="field"><label>إلى الساعة</label><input id="mLeaveTo" type="time"></div>
+      </div>
       <div class="field"><label>السبب</label><input id="mLeaveReason" placeholder="مثال: ظرف عائلي"></div>
       <button class="btn btn-primary" id="btnSubmitLeave">إرسال الطلب</button>
       <button class="link-btn" id="btnCloseLeaveModal" style="width:100%;margin-top:12px;">إلغاء</button>
@@ -687,15 +701,28 @@ function openLeaveRequestModal(){
   $("#modalRoot").innerHTML = modal;
   $("#btnCloseLeaveModal").addEventListener("click", closeModal);
   $("#btnSubmitLeave").addEventListener("click", submitLeaveRequest);
+  $all("[data-leave-type]").forEach(c=> c.addEventListener("click", ()=>{
+    $all("[data-leave-type]").forEach(x=>x.classList.remove("on"));
+    c.classList.add("on");
+    $("#leaveTimeRow").classList.toggle("hidden", c.dataset.leaveType!=="partial");
+  }));
 }
 async function submitLeaveRequest(){
   const date = $("#mLeaveDate").value;
   const reason = $("#mLeaveReason").value.trim();
+  const typeEl = $all("[data-leave-type].on")[0];
+  const type = typeEl ? typeEl.dataset.leaveType : "full";
   if(!date){ showToast("حدد التاريخ"); return; }
-  await addDoc(collection(db, COL_LEAVE), {
+  const data = {
     employeeId: currentEmployee.id, employeeName: currentEmployee.name,
-    date, reason, status: "pending", createdAt: serverTimestamp()
-  });
+    date, reason, type, status: "pending", createdAt: serverTimestamp()
+  };
+  if(type==="partial"){
+    const fromTime = $("#mLeaveFrom").value, toTime = $("#mLeaveTo").value;
+    if(!fromTime || !toTime){ showToast("حدد وقت البداية والنهاية"); return; }
+    data.fromTime = fromTime; data.toTime = toTime;
+  }
+  await addDoc(collection(db, COL_LEAVE), data);
   closeModal();
   showToast("تم إرسال طلب الإجازة، بانتظار موافقة الإدارة");
   renderMyLeaves();
@@ -707,9 +734,10 @@ async function renderMyLeaves(){
   if(list.length===0){ card.style.display="none"; return; }
   card.style.display="block";
   const statusPill = s=> s==="approved" ? `<span class="pill pill-green">موافَق</span>` : s==="rejected" ? `<span class="pill pill-red">مرفوض</span>` : `<span class="pill pill-gold">قيد الانتظار</span>`;
-  $("#empLeavesList").innerHTML = list.slice(0,10).map(l=>`
-    <div class="employee-row"><span>${l.date} — ${l.reason||"بدون سبب"}</span>${statusPill(l.status)}</div>
-  `).join("");
+  $("#empLeavesList").innerHTML = list.slice(0,10).map(l=>{
+    const typeLabel = l.type==="partial" ? `فترة (${l.fromTime||"?"}–${l.toTime||"?"})` : "يوم كامل";
+    return `<div class="employee-row"><span>${l.date} — ${typeLabel} — ${l.reason||"بدون سبب"}</span>${statusPill(l.status)}</div>`;
+  }).join("");
 }
 
 /* ---------------- SURPRISE SPOT-CHECK ---------------- */
@@ -779,6 +807,17 @@ async function requestSpotCheck(empId){
 
 /* ---------------- FACE RECOGNITION ---------------- */
 let faceApiLoaded = false, faceModelsLoaded = false, faceStream = null;
+let lastCapturedPhoto = null;
+function captureVideoFrame(video, maxWidth){
+  maxWidth = maxWidth || 240;
+  const canvas = document.createElement("canvas");
+  const scale = maxWidth / (video.videoWidth || maxWidth);
+  canvas.width = maxWidth;
+  canvas.height = Math.round((video.videoHeight || maxWidth) * scale);
+  const ctx = canvas.getContext("2d");
+  try{ ctx.drawImage(video, 0, 0, canvas.width, canvas.height); }catch(e){ return null; }
+  return canvas.toDataURL("image/jpeg", 0.5);
+}
 function loadScriptTag(src){
   return new Promise((resolve,reject)=>{
     const s = document.createElement("script");
@@ -863,6 +902,7 @@ async function captureFace(mode){
     if(mode==="verify" && faceAttemptCount>=3) showFaceFallback();
     return;
   }
+  lastCapturedPhoto = captureVideoFrame(video);
   const descriptor = Array.from(detection.descriptor);
   if(mode === "enroll"){
     await updateDoc(doc(db, COL_EMP, currentEmployee.id), { faceDescriptor: descriptor });
@@ -1000,17 +1040,19 @@ async function renderPendingLeaveRequests(){
     const list = snap.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=> a.date.localeCompare(b.date));
     if(list.length===0){ card.style.display="none"; return; }
     card.style.display="block";
-    wrap.innerHTML = list.map(l=>`
-      <div class="employee-row" style="flex-wrap:wrap;">
+    wrap.innerHTML = list.map(l=>{
+      const typeLabel = l.type==="partial" ? `فترة (${l.fromTime||"?"}–${l.toTime||"?"})` : "يوم كامل";
+      return `<div class="employee-row" style="flex-wrap:wrap;">
         <div>
           <div style="font-weight:700;">${l.employeeName}</div>
-          <div class="muted" style="font-size:12px;">${l.date} — ${l.reason||"بدون سبب"}</div>
+          <div class="muted" style="font-size:12px;">${l.date} — ${typeLabel} — ${l.reason||"بدون سبب"}</div>
         </div>
         <div style="display:flex;gap:8px;">
           <button class="btn btn-green btn-sm" data-leave-approve="${l.id}">موافقة</button>
           <button class="btn btn-red btn-sm" data-leave-reject="${l.id}">رفض</button>
         </div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     $all("[data-leave-approve]").forEach(b=> b.addEventListener("click", ()=> decideLeave(b.dataset.leaveApprove,"approved")));
     $all("[data-leave-reject]").forEach(b=> b.addEventListener("click", ()=> decideLeave(b.dataset.leaveReject,"rejected")));
   }catch(e){
@@ -1353,11 +1395,11 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
       } else {
         const rec = attByDate[dStr];
         if(!rec || !rec.checkInTime){
-          // don't judge today as absent until the shift's scheduled end time has actually passed
+          // grace period: only judge today as absent 120 minutes after the shift's scheduled start
           const isToday = dStr === todayStr;
-          const shiftEndMin = minutesFromHHMM(sched.end);
-          const shiftOver = !isToday || (shiftEndMin!=null && nowMin >= shiftEndMin);
-          if(shiftOver){
+          const shiftStartMin = minutesFromHHMM(sched.start);
+          const graceOver = !isToday || (shiftStartMin!=null && nowMin >= shiftStartMin + 120);
+          if(graceOver){
             const amt = dailyRate; // lose that day's full daily wage
             autoDeduction += amt;
             absentDays++;
@@ -1444,14 +1486,18 @@ async function renderPayrollBalances(){
         <span class="big-num" style="font-size:22px;color:${b.balance>0?"var(--green)":"var(--muted)"};">${money(b.balance)} د.ع</span>
       </div>
       <button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px;" data-settle="${e.id}" ${b.balance<=0?"disabled":""}>تسليم الراتب</button>
-      <div class="row">
+      <div class="row" style="margin-bottom:8px;">
         <button class="btn btn-outline btn-sm" style="width:100%;" data-history="${e.id}">📜 السجل والتعديل</button>
+      </div>
+      <div class="row">
+        <button class="btn btn-outline btn-sm" style="width:100%;" data-dailylog="${e.id}">📷 السجل اليومي الكامل</button>
       </div>
     </div>`;
   }
   wrap.innerHTML = rows;
   $all("[data-settle]").forEach(b=> b.addEventListener("click", ()=> openSettleModal(b.dataset.settle)));
   $all("[data-history]").forEach(b=> b.addEventListener("click", ()=> openHistoryModal(b.dataset.history)));
+  $all("[data-dailylog]").forEach(b=> b.addEventListener("click", ()=> openDailyLogModal(b.dataset.dailylog)));
 }
 
 function openSettleModal(empId){
@@ -1654,6 +1700,69 @@ function openAttendanceEditModal(emp, dateStr_){
     renderPayrollBalances();
     openHistoryModal(emp.id);
   });
+}
+
+/* ---- Full daily log (every day, with photos) ---- */
+async function openDailyLogModal(empId){
+  const emp = employeesCache.find(e=>e.id===empId);
+  const modal = `
+  <div class="modal-bg" id="dailyLogModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>السجل اليومي الكامل — ${emp.name}</h3>
+      <div id="dailyLogList"><div class="spinner"></div></div>
+      <button class="link-btn" id="btnCloseDailyLog" style="width:100%;margin-top:14px;">إغلاق</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCloseDailyLog").addEventListener("click", closeModal);
+  loadDailyLog(emp);
+}
+async function loadDailyLog(emp){
+  const wrap = $("#dailyLogList");
+  try{
+    const snap = await getDocs(query(collection(db, COL_ATT), where("employeeId","==",emp.id)));
+    const list = snap.docs.map(d=>d.data()).sort((a,b)=> b.date.localeCompare(a.date));
+    if(list.length===0){ wrap.innerHTML = `<div class="muted" style="font-size:13px;">لا توجد سجلات بعد</div>`; return; }
+    wrap.innerHTML = list.map(r=>{
+      const statusPill = !r.checkInTime ? `<span class="pill pill-red">غياب</span>`
+        : (r.lateMinutes>0 ? `<span class="pill pill-gold">تأخير ${r.lateMinutes}د</span>` : `<span class="pill pill-green">بالوقت</span>`);
+      const inPhoto = r.checkInPhoto ? `<img src="${r.checkInPhoto}" style="width:40px;height:40px;border-radius:8px;object-fit:cover;" data-view-photo="${r.checkInPhoto}">` : "";
+      const outPhoto = r.checkOutPhoto ? `<img src="${r.checkOutPhoto}" style="width:40px;height:40px;border-radius:8px;object-fit:cover;" data-view-photo="${r.checkOutPhoto}">` : "";
+      return `<div class="card" style="margin-bottom:10px;padding:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <b>${r.date}</b> ${statusPill}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${inPhoto}
+            <div><div class="muted" style="font-size:11px;">حضور</div><div>${r.checkInTime||"—"}</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${outPhoto}
+            <div><div class="muted" style="font-size:11px;">انصراف</div><div>${r.checkOutTime||"—"}${r.earlyMinutes>0?` <span class="pill pill-gold" style="font-size:10px;">مبكر ${r.earlyMinutes}د</span>`:""}</div></div>
+          </div>
+        </div>
+      </div>`;
+    }).join("");
+    $all("[data-view-photo]").forEach(img=> img.addEventListener("click", ()=> viewPhotoFull(img.dataset.viewPhoto)));
+  }catch(e){
+    console.error("loadDailyLog failed", e);
+    wrap.innerHTML = `<div class="muted" style="font-size:13px;">تعذّر تحميل السجل</div>`;
+  }
+}
+function viewPhotoFull(src){
+  const modal = `
+  <div class="modal-bg" id="photoViewModalBg" style="align-items:center;">
+    <div style="max-width:90%;">
+      <img src="${src}" style="width:100%;border-radius:14px;">
+      <button class="link-btn" id="btnClosePhotoView" style="width:100%;margin-top:12px;color:#fff;">إغلاق</button>
+    </div>
+  </div>`;
+  const holder = document.createElement("div");
+  holder.innerHTML = modal;
+  document.body.appendChild(holder.firstElementChild);
+  $("#btnClosePhotoView").addEventListener("click", ()=> $("#photoViewModalBg").remove());
 }
 async function loadHistoryLists(emp){
   const paySnap = await getDocs(query(collection(db,COL_PAY), where("employeeId","==",emp.id)));
