@@ -223,6 +223,10 @@
         </div>
         <div id="empWeekSummary"><div class="spinner"></div></div>
       </div>
+      <div class="card" id="empTasksCard" style="display:none;">
+        <h3>📝 مهامي اليوم</h3>
+        <div id="empTasksList"></div>
+      </div>
       <button class="btn btn-outline" id="btnRequestLeave" style="margin-bottom:14px;">📅 طلب إجازة</button>
       <div class="card" id="empLeavesCard" style="display:none;">
         <h3>طلبات إجازتي</h3>
@@ -307,6 +311,19 @@
         <div id="statementResult"></div>
       </div>
 
+      <!-- TAB: tasks -->
+      <div id="tab-tasks" class="tab-panel hidden">
+        <button class="btn btn-primary" id="btnAddTask" style="margin-bottom:14px;">+ إضافة مهمة جديدة</button>
+        <div class="card">
+          <h3>المهام النشطة</h3>
+          <div id="activeTasksList"><div class="spinner"></div></div>
+        </div>
+        <div class="card">
+          <h3>📋 السجل الكامل (بدون تعديل)</h3>
+          <div id="taskLogList"><div class="spinner"></div></div>
+        </div>
+      </div>
+
     </main>
 
     <nav class="bottom-nav" id="adminNav">
@@ -315,6 +332,7 @@
       <button class="nav-btn" data-tab="stores"><span class="nav-icon">📍</span>الفروع</button>
       <button class="nav-btn" data-tab="deductions"><span class="nav-icon">➖</span>استقطاع</button>
       <button class="nav-btn" data-tab="payroll"><span class="nav-icon">💰</span>الرواتب</button>
+      <button class="nav-btn" data-tab="tasks"><span class="nav-icon">📝</span>المهام</button>
       <button class="nav-btn" data-tab="statements"><span class="nav-icon">📄</span>كشوفات</button>
     </nav>
     <button class="link-btn" id="btnAdminLogout" style="position:fixed;top:16px;left:16px;color:#fff;z-index:60;">خروج</button>
@@ -354,6 +372,7 @@ const COL_PAY = "hr_payments";
 const COL_LEAVE = "hr_leaves";
 const COL_SPOT = "hr_spotchecks";
 const COL_ADJ = "hr_balance_adjustments";
+const COL_TASK = "hr_tasks";
 const COL_CFG = "hr_config";
 
 const DAY_NAMES = ["الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
@@ -508,6 +527,7 @@ async function enterEmployee(emp){
   locateAndPrepare();
   renderEmployeeWeekSummary(); // don't block GPS/check-in on this — runs independently
   renderMyLeaves();
+  renderMyTasks();
   listenForSpotChecks();
 }
 
@@ -805,6 +825,204 @@ async function requestSpotCheck(empId){
   renderOverview();
 }
 
+/* ---------------- DAILY TASKS ---------------- */
+function taskDueDate(task){ return new Date(task.date+"T"+task.dueTime); }
+function taskStatus(task, now){
+  now = now || new Date();
+  const due = taskDueDate(task);
+  if(task.completed){
+    return task.completedOnTime ? "done" : "missed";
+  }
+  return now > due ? "missed" : "pending";
+}
+function taskAmount(task, status){
+  if(status==="done") return task.rewardAmount||0;
+  if(status==="missed") return -(task.penaltyAmount||0);
+  return 0;
+}
+async function computeTasksNet(emp, startDate, endDate){
+  const startStr = dateStr(startDate), endStr = dateStr(endDate);
+  let net = 0;
+  const items = [];
+  try{
+    const snap = await getDocs(query(collection(db,COL_TASK), where("employeeId","==",emp.id), where("date",">=",startStr), where("date","<=",endStr)));
+    const now = new Date();
+    snap.docs.forEach(d=>{
+      const t = { id:d.id, ...d.data() };
+      const status = taskStatus(t, now);
+      const amount = taskAmount(t, status);
+      net += amount;
+      items.push({ ...t, status, amount });
+    });
+  }catch(e){ console.error("computeTasksNet failed", e); }
+  return { net, items };
+}
+
+/* ---- Employee-side: today's tasks ---- */
+async function renderMyTasks(){
+  const card = $("#empTasksCard");
+  const wrap = $("#empTasksList");
+  try{
+    const todayStr = dateStr(new Date());
+    const snap = await getDocs(query(collection(db,COL_TASK), where("employeeId","==",currentEmployee.id), where("date","==",todayStr)));
+    const tasks = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    if(tasks.length===0){ card.style.display="none"; return; }
+    card.style.display="block";
+    const now = new Date();
+    wrap.innerHTML = tasks.sort((a,b)=> a.dueTime.localeCompare(b.dueTime)).map(t=>{
+      const status = taskStatus(t, now);
+      const pill = status==="done" ? `<span class="pill pill-green">✓ أُنجزت</span>` : status==="missed" ? `<span class="pill pill-red">فات الوقت</span>` : `<span class="pill pill-gold">حتى ${t.dueTime}</span>`;
+      const canComplete = !t.completed;
+      return `<div class="card" style="margin-bottom:10px;padding:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <b>${t.title}</b> ${pill}
+        </div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px;">مكافأة الإنجاز: ${money(t.rewardAmount||0)} د.ع · استقطاع التأخر: ${money(t.penaltyAmount||0)} د.ع</div>
+        ${canComplete ? `<button class="btn btn-primary btn-sm" style="width:100%;" data-complete-task="${t.id}">✅ تم الإنجاز</button>` : ""}
+      </div>`;
+    }).join("");
+    $all("[data-complete-task]").forEach(b=> b.addEventListener("click", ()=> completeTask(b.dataset.completeTask)));
+  }catch(e){
+    console.error("renderMyTasks failed", e);
+    card.style.display="none";
+  }
+}
+async function completeTask(taskId){
+  const snap = await getDoc(doc(db, COL_TASK, taskId));
+  const t = snap.data();
+  const now = new Date();
+  const due = taskDueDate(t);
+  const onTime = now <= due;
+  await updateDoc(doc(db, COL_TASK, taskId), { completed:true, completedOnTime:onTime, completedAt: serverTimestamp() });
+  showToast(onTime ? "أحسنت! تمت إضافة المكافأة ✅" : "انجزتها بعد الوقت المحدد — تم تسجيل الاستقطاع");
+  renderMyTasks();
+  renderEmployeeWeekSummary();
+}
+
+/* ---- Admin-side: manage tasks ---- */
+function openTaskModal(taskId){
+  const editing = taskId ? true : false;
+  const empOptions = employeesCache.map(e=>`<option value="${e.id}">${e.name}</option>`).join("");
+  const modal = `
+  <div class="modal-bg" id="taskModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>${editing?"تعديل مهمة":"إضافة مهمة جديدة"}</h3>
+      <div class="field"><label>الموظف</label><select id="mTaskEmp">${empOptions}</select></div>
+      <div class="field"><label>اسم المهمة</label><input id="mTaskTitle" placeholder="مثال: تجهيز طلبات"></div>
+      <div class="row">
+        <div class="field"><label>التاريخ</label><input id="mTaskDate" type="date" value="${dateStr(new Date())}"></div>
+        <div class="field"><label>الوقت المستحق</label><input id="mTaskTime" type="time"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>مكافأة الإنجاز (د.ع)</label><input id="mTaskReward" type="number" value="0"></div>
+        <div class="field"><label>استقطاع التأخر (د.ع)</label><input id="mTaskPenalty" type="number" value="0"></div>
+      </div>
+      <button class="btn btn-primary" id="btnSaveTask">حفظ</button>
+      ${editing?`<button class="btn btn-outline" id="btnDeleteTask" style="margin-top:10px;color:var(--red);border-color:var(--red);">حذف المهمة</button>`:""}
+      <button class="link-btn" id="btnCloseTaskModal" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCloseTaskModal").addEventListener("click", closeModal);
+  $("#btnSaveTask").addEventListener("click", ()=> saveTask(taskId));
+  if(editing){
+    getDoc(doc(db,COL_TASK,taskId)).then(snap=>{
+      const t = snap.data();
+      $("#mTaskEmp").value = t.employeeId;
+      $("#mTaskTitle").value = t.title;
+      $("#mTaskDate").value = t.date;
+      $("#mTaskTime").value = t.dueTime;
+      $("#mTaskReward").value = t.rewardAmount||0;
+      $("#mTaskPenalty").value = t.penaltyAmount||0;
+    });
+    $("#btnDeleteTask").addEventListener("click", async ()=>{
+      if(!confirm("حذف هذه المهمة نهائياً؟")) return;
+      await deleteDoc(doc(db,COL_TASK,taskId));
+      closeModal();
+      showToast("تم حذف المهمة");
+      renderTasksTab();
+    });
+  }
+}
+async function saveTask(taskId){
+  const empId = $("#mTaskEmp").value;
+  const emp = employeesCache.find(e=>e.id===empId);
+  const title = $("#mTaskTitle").value.trim();
+  const date = $("#mTaskDate").value;
+  const dueTime = $("#mTaskTime").value;
+  const rewardAmount = Number($("#mTaskReward").value)||0;
+  const penaltyAmount = Number($("#mTaskPenalty").value)||0;
+  if(!emp || !title || !date || !dueTime){ showToast("تأكد من تعبئة كل الحقول"); return; }
+  const data = { employeeId:empId, employeeName:emp.name, title, date, dueTime, rewardAmount, penaltyAmount };
+  if(taskId){
+    await updateDoc(doc(db,COL_TASK,taskId), data);
+    showToast("تم تحديث المهمة");
+  } else {
+    data.completed = false; data.completedOnTime = false; data.createdAt = serverTimestamp();
+    await addDoc(collection(db,COL_TASK), data);
+    showToast("تمت إضافة المهمة");
+  }
+  closeModal();
+  renderTasksTab();
+}
+async function renderTasksTab(){
+  const activeWrap = $("#activeTasksList");
+  const logWrap = $("#taskLogList");
+  activeWrap.innerHTML = `<div class="spinner"></div>`;
+  logWrap.innerHTML = `<div class="spinner"></div>`;
+  try{
+    const snap = await getDocs(collection(db, COL_TASK));
+    const all = snap.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=> (b.date+b.dueTime).localeCompare(a.date+a.dueTime));
+    const now = new Date();
+
+    if(all.length===0){
+      activeWrap.innerHTML = `<div class="empty-state">لا توجد مهام مضافة بعد</div>`;
+      logWrap.innerHTML = `<div class="empty-state">لا يوجد سجل بعد</div>`;
+      return;
+    }
+
+    const statusPill = s=> s==="done" ? `<span class="pill pill-green">✓ أُنجزت بالوقت</span>` : s==="missed" ? `<span class="pill pill-red">فاتها الوقت</span>` : `<span class="pill pill-gold">قيد الانتظار</span>`;
+
+    // Active = not yet completed and not yet judged missed permanently — show everything not completed, plus recently completed, with edit tools
+    const active = all.filter(t=> !t.completed);
+    activeWrap.innerHTML = active.length===0 ? `<div class="muted" style="font-size:13px;">لا توجد مهام نشطة</div>` : active.map(t=>{
+      const status = taskStatus(t, now);
+      return `<div class="employee-row" style="flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:700;">${t.employeeName} — ${t.title}</div>
+          <div class="muted" style="font-size:12px;">${t.date} حتى ${t.dueTime} · مكافأة ${money(t.rewardAmount||0)} / استقطاع ${money(t.penaltyAmount||0)}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          ${statusPill(status)}
+          <button class="icon-btn" data-edit-task="${t.id}">✏️</button>
+        </div>
+      </div>`;
+    }).join("");
+    $all("[data-edit-task]").forEach(b=> b.addEventListener("click", ()=> openTaskModal(b.dataset.editTask)));
+
+    // Full read-only log = everything, no edit tools
+    logWrap.innerHTML = `<table>
+      <tr><th>الموظف</th><th>المهمة</th><th>التاريخ</th><th>الحالة</th><th>المبلغ</th></tr>
+      ${all.map(t=>{
+        const status = taskStatus(t, now);
+        const amt = taskAmount(t, status);
+        return `<tr>
+          <td>${t.employeeName}</td>
+          <td>${t.title}</td>
+          <td>${t.date}</td>
+          <td>${status==="done"?"أُنجزت بالوقت":status==="missed"?"فاتها الوقت":"قيد الانتظار"}</td>
+          <td style="color:${amt>0?"var(--green)":amt<0?"var(--red)":"var(--muted)"};">${amt>0?"+":""}${money(amt)}</td>
+        </tr>`;
+      }).join("")}
+    </table>`;
+  }catch(e){
+    console.error("renderTasksTab failed", e);
+    activeWrap.innerHTML = `<div class="muted">تعذّر التحميل — قد يحتاج فهرس Firestore</div>`;
+    logWrap.innerHTML = "";
+  }
+}
+
 /* ---------------- FACE RECOGNITION ---------------- */
 let faceApiLoaded = false, faceModelsLoaded = false, faceStream = null;
 let lastCapturedPhoto = null;
@@ -978,6 +1196,7 @@ function switchTab(tab){
   if(tab==="stores") renderStoreList();
   if(tab==="deductions") renderDeductionList();
   if(tab==="payroll") renderPayrollBalances();
+  if(tab==="tasks") renderTasksTab();
   if(tab==="statements") renderStatementsTab();
 }
 
@@ -1048,22 +1267,60 @@ async function renderPendingLeaveRequests(){
           <div class="muted" style="font-size:12px;">${l.date} — ${typeLabel} — ${l.reason||"بدون سبب"}</div>
         </div>
         <div style="display:flex;gap:8px;">
-          <button class="btn btn-green btn-sm" data-leave-approve="${l.id}">موافقة</button>
+          <button class="btn btn-green btn-sm" data-leave-approve="${l.id}">قبول</button>
           <button class="btn btn-red btn-sm" data-leave-reject="${l.id}">رفض</button>
         </div>
       </div>`;
     }).join("");
-    $all("[data-leave-approve]").forEach(b=> b.addEventListener("click", ()=> decideLeave(b.dataset.leaveApprove,"approved")));
-    $all("[data-leave-reject]").forEach(b=> b.addEventListener("click", ()=> decideLeave(b.dataset.leaveReject,"rejected")));
+    $all("[data-leave-approve]").forEach(b=> b.addEventListener("click", ()=> openLeaveApprovalModal(b.dataset.leaveApprove)));
+    $all("[data-leave-reject]").forEach(b=> b.addEventListener("click", ()=> decideLeaveReject(b.dataset.leaveReject)));
   }catch(e){
     console.error("leave requests load failed", e);
     card.style.display="block";
     wrap.innerHTML = `<div class="muted">تعذّر تحميل الطلبات — قد يحتاج فهرس Firestore</div>`;
   }
 }
-async function decideLeave(leaveId, status){
-  await updateDoc(doc(db, COL_LEAVE, leaveId), { status, decidedAt: serverTimestamp() });
-  showToast(status==="approved" ? "تمت الموافقة على الإجازة" : "تم رفض الطلب");
+function openLeaveApprovalModal(leaveId, empForContext){
+  const modal = `
+  <div class="modal-bg" id="leaveApprovalModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>${empForContext?"تعديل نوع الإجازة":"قبول الإجازة"} — نوعها؟</h3>
+      <button class="btn btn-green" id="btnLeavePaid" style="margin-bottom:10px;">إجازة مع راتب كامل</button>
+      <button class="btn btn-outline" id="btnLeaveUnpaid" style="margin-bottom:10px;">إجازة بدون راتب</button>
+      <button class="btn btn-gold" id="btnLeavePartial">إجازة مع استقطاع مبلغ محدد</button>
+      <div class="field hidden" id="leavePartialAmountRow" style="margin-top:14px;">
+        <label>مبلغ الاستقطاع (د.ع)</label>
+        <input id="mLeavePartialAmount" type="number" placeholder="مثال: 5000">
+        <button class="btn btn-primary" id="btnConfirmPartial" style="margin-top:10px;">تأكيد الاستقطاع</button>
+      </div>
+      <button class="link-btn" id="btnCancelLeaveApproval" style="width:100%;margin-top:14px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCancelLeaveApproval").addEventListener("click", ()=> empForContext ? openHistoryModal(empForContext.id) : closeModal());
+  $("#btnLeavePaid").addEventListener("click", ()=> decideLeaveApprove(leaveId, "paid", 0, empForContext));
+  $("#btnLeaveUnpaid").addEventListener("click", ()=> decideLeaveApprove(leaveId, "unpaid", null, empForContext));
+  $("#btnLeavePartial").addEventListener("click", ()=> $("#leavePartialAmountRow").classList.remove("hidden"));
+  $("#btnConfirmPartial").addEventListener("click", ()=>{
+    const amount = Number($("#mLeavePartialAmount").value)||0;
+    if(amount<=0){ showToast("أدخل مبلغ صحيح"); return; }
+    decideLeaveApprove(leaveId, "partial", amount, empForContext);
+  });
+}
+async function decideLeaveApprove(leaveId, payType, amount, empForContext){
+  const data = { status:"approved", payType, decidedAt: serverTimestamp() };
+  if(payType==="partial") data.deductionAmount = amount;
+  await updateDoc(doc(db, COL_LEAVE, leaveId), data);
+  showToast("تم حفظ نوع الإجازة");
+  renderPendingLeaveRequests();
+  renderPayrollBalances();
+  if(empForContext){ openHistoryModal(empForContext.id); }
+  else { closeModal(); }
+}
+async function decideLeaveReject(leaveId){
+  await updateDoc(doc(db, COL_LEAVE, leaveId), { status:"rejected", decidedAt: serverTimestamp() });
+  showToast("تم رفض الطلب");
   renderPendingLeaveRequests();
 }
 function renderEmployeeList(){
@@ -1373,10 +1630,10 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
   const manualEntries = dedSnap.docs.map(d=>d.data());
   const manualDeduction = manualEntries.reduce((s,v)=>s+v.amount,0);
 
-  let approvedLeaveDates = new Set();
+  let approvedLeaveMap = new Map();
   try{
     const leaveSnap = await getDocs(query(collection(db,COL_LEAVE), where("employeeId","==",emp.id), where("date",">=",rangeStartStr), where("date","<=",rangeEndStr)));
-    leaveSnap.docs.forEach(d=>{ if(d.data().status==="approved") approvedLeaveDates.add(d.data().date); });
+    leaveSnap.docs.forEach(d=>{ const v = d.data(); if(v.status==="approved") approvedLeaveMap.set(v.date, { ...v, id:d.id }); });
   }catch(e){ console.error("leave query failed", e); }
 
   let autoDeduction = 0, absentDays = 0, lateDays = 0, leaveDays = 0;
@@ -1389,9 +1646,19 @@ async function computeBreakdownForRange(emp, rangeStartDate, rangeEndDate){
     if(workDays.includes(cur.getDay())){
       const dStr = dateStr(cur);
       const sched = getScheduleForDate(emp, cur);
-      if(approvedLeaveDates.has(dStr)){
+      if(approvedLeaveMap.has(dStr)){
+        const lv = approvedLeaveMap.get(dStr);
         leaveDays++;
-        dayDetails.push({ date:dStr, type:"leave", amount:0 });
+        if(lv.payType==="unpaid"){
+          autoDeduction += dailyRate;
+          dayDetails.push({ date:dStr, type:"leave-unpaid", amount:dailyRate, leaveId:lv.id });
+        } else if(lv.payType==="partial"){
+          const amt = lv.deductionAmount||0;
+          autoDeduction += amt;
+          dayDetails.push({ date:dStr, type:"leave-partial", amount:amt, leaveId:lv.id });
+        } else {
+          dayDetails.push({ date:dStr, type:"leave", amount:0, leaveId:lv.id });
+        }
       } else {
         const rec = attByDate[dStr];
         if(!rec || !rec.checkInTime){
@@ -1447,8 +1714,9 @@ async function computeEmployeeBalance(emp){
   const totalPaid = paySnap.docs.reduce((s,d)=> s + (d.data().amount||0), 0);
   const adjSnap = await getDocs(query(collection(db,COL_ADJ), where("employeeId","==",emp.id)));
   const totalAdjustments = adjSnap.docs.reduce((s,d)=> s + (d.data().amount||0), 0);
-  const balance = totalCredited - breakdown.autoDeduction - breakdown.manualDeduction - totalPaid + totalAdjustments;
-  return { daysCount, dailyRate, totalCredited, autoDeduction: breakdown.autoDeduction, manualDeduction: breakdown.manualDeduction, totalPaid, totalAdjustments, balance };
+  const tasks = await computeTasksNet(emp, start, today);
+  const balance = totalCredited - breakdown.autoDeduction - breakdown.manualDeduction - totalPaid + totalAdjustments + tasks.net;
+  return { daysCount, dailyRate, totalCredited, autoDeduction: breakdown.autoDeduction, manualDeduction: breakdown.manualDeduction, totalPaid, totalAdjustments, tasksNet: tasks.net, balance };
 }
 
 /* ---- Payroll tab: live balances + settle button ---- */
@@ -1473,11 +1741,12 @@ async function renderPayrollBalances(){
         <div class="pill pill-gold">${money(e.weeklySalary||0)} د.ع/أسبوع</div>
       </div>
       <table>
-        <tr><th>يومية الموظف</th><th>استقطاعات</th><th>مدفوع سابقاً</th></tr>
+        <tr><th>يومية الموظف</th><th>استقطاعات</th><th>مدفوع سابقاً</th><th>صافي المهام</th></tr>
         <tr>
           <td>${money(b.dailyRate)}</td>
           <td>${money(b.autoDeduction+b.manualDeduction)}</td>
           <td>${money(b.totalPaid)}</td>
+          <td style="color:${b.tasksNet>0?"var(--green)":b.tasksNet<0?"var(--red)":"inherit"};">${b.tasksNet>0?"+":""}${money(b.tasksNet)}</td>
         </tr>
       </table>
       <div class="stitch"></div>
@@ -1581,9 +1850,12 @@ async function loadMovements(emp){
       let label;
       if(row.source==="manual") label = row.reason || "استقطاع يدوي";
       else if(row.type==="absent") label = "غياب";
+      else if(row.type==="leave-unpaid") label = "إجازة بدون راتب";
+      else if(row.type==="leave-partial") label = "إجازة باستقطاع محدد";
       else label = `${row.lateMin>0?`تأخير ${row.lateMin}د `:""}${row.earlyMin>0?`مبكر ${row.earlyMin}د`:""}`.trim();
-      const editAttr = row.source==="manual" ? `data-edit-ded="${row.id}"` : `data-edit-att="${row.date}"`;
-      const delAttr = row.source==="manual" ? `data-del-ded2="${row.id}"` : (row.type==="absent" ? `data-forgive-absent="${row.date}"` : `data-forgive-late="${row.date}"`);
+      const isLeave = row.type==="leave-unpaid" || row.type==="leave-partial";
+      const editAttr = row.source==="manual" ? `data-edit-ded="${row.id}"` : (isLeave ? `data-edit-leave="${row.leaveId}"` : `data-edit-att="${row.date}"`);
+      const delAttr = row.source==="manual" ? `data-del-ded2="${row.id}"` : (isLeave ? `data-revert-leave="${row.leaveId}"` : (row.type==="absent" ? `data-forgive-absent="${row.date}"` : `data-forgive-late="${row.date}"`));
       return `<div class="employee-row" style="flex-wrap:wrap;">
         <div><div>${row.date} — ${label}</div><span class="pill pill-red">${money(row.amount)} د.ع</span></div>
         <div style="display:flex;gap:6px;">
@@ -1611,6 +1883,12 @@ async function loadMovements(emp){
       if(!confirm("إلغاء استقطاع التأخير/الانصراف المبكر لهذا اليوم؟")) return;
       await forgiveLateness(emp, btn.dataset.forgiveLate);
       showToast("تم إلغاء الاستقطاع، الرصيد رجع");
+      loadMovements(emp); renderPayrollBalances();
+    }));
+    $all("[data-edit-leave]").forEach(btn=> btn.addEventListener("click", ()=> openLeaveApprovalModal(btn.dataset.editLeave, emp)));
+    $all("[data-revert-leave]").forEach(btn=> btn.addEventListener("click", async ()=>{
+      if(!confirm("إرجاع هذه الإجازة لتكون مدفوعة بالكامل بدون استقطاع؟")) return;
+      await decideLeaveApprove(btn.dataset.revertLeave, "paid", 0, emp);
       loadMovements(emp); renderPayrollBalances();
     }));
   }catch(e){
@@ -1877,7 +2155,9 @@ async function runStatement(){
 
       const dayRows = b.dayDetails.map(d=>{
         if(d.type==="absent") return `<tr><td>${d.date}</td><td>غياب</td><td>${money(d.amount)}</td></tr>`;
-        if(d.type==="leave") return `<tr><td>${d.date}</td><td>إجازة معتمدة</td><td>0</td></tr>`;
+        if(d.type==="leave") return `<tr><td>${d.date}</td><td>إجازة مدفوعة كاملة</td><td>0</td></tr>`;
+        if(d.type==="leave-unpaid") return `<tr><td>${d.date}</td><td>إجازة بدون راتب</td><td>${money(d.amount)}</td></tr>`;
+        if(d.type==="leave-partial") return `<tr><td>${d.date}</td><td>إجازة باستقطاع محدد</td><td>${money(d.amount)}</td></tr>`;
         return `<tr><td>${d.date}</td><td>${d.lateMin>0?`تأخير ${d.lateMin}د `:""}${d.earlyMin>0?`مبكر ${d.earlyMin}د`:""}</td><td>${money(d.amount)}</td></tr>`;
       }).join("");
       const manualRows = b.manualEntries.map(m=>`<tr><td>${m.date}</td><td>${m.reason||"استقطاع يدوي"}</td><td>${money(m.amount)}</td></tr>`).join("");
@@ -1973,7 +2253,7 @@ function renderMonthCalendar(monthStartDate, dayDetails){
     if(info){
       if(info.type==="absent"){ bg="var(--red-tint)"; color="var(--red)"; }
       else if(info.type==="late"){ bg="var(--gold-tint)"; color="var(--gold)"; }
-      else if(info.type==="leave"){ bg="#DDE8F5"; color="#3B6FA0"; }
+      else if(info.type==="leave" || info.type==="leave-unpaid" || info.type==="leave-partial"){ bg="#DDE8F5"; color="#3B6FA0"; }
     } else if(dt <= new Date()){
       bg = "var(--green-tint)"; color="var(--green)";
     }
@@ -2020,6 +2300,7 @@ $("#btnAdminLogout").addEventListener("click", ()=>{
 $("#btnAddEmployee").addEventListener("click", ()=> openEmployeeModal(null));
 $("#btnAddStore").addEventListener("click", ()=> openStoreModal(null));
 $("#btnAddDeduction").addEventListener("click", openDeductionModal);
+$("#btnAddTask").addEventListener("click", ()=> openTaskModal(null));
 $all(".chip-check[data-period]").forEach(c=> c.addEventListener("click", ()=>{
   $all(".chip-check[data-period]").forEach(x=>x.classList.remove("on"));
   c.classList.add("on");
