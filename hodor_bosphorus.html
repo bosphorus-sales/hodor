@@ -204,6 +204,7 @@
       <div class="sub" id="empSub">—</div>
     </header>
     <main>
+      <div id="empTaskBanners"></div>
       <div class="card center">
         <div class="muted" id="nowDate">—</div>
         <div class="big-num" id="nowTime" style="margin:4px 0 14px;">—:—</div>
@@ -224,7 +225,10 @@
         <div id="empWeekSummary"><div class="spinner"></div></div>
       </div>
       <div class="card" id="empTasksCard" style="display:none;">
-        <h3>📝 مهامي اليوم</h3>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <h3 style="margin:0;">📝 مهامي اليوم</h3>
+          <button class="link-btn" id="btnMyTasksLog" style="font-size:12px;">سجل مهامي بالكامل</button>
+        </div>
         <div id="empTasksList"></div>
       </div>
       <button class="btn btn-outline" id="btnRequestLeave" style="margin-bottom:14px;">📅 طلب إجازة</button>
@@ -317,6 +321,10 @@
         <div class="card">
           <h3>المهام النشطة</h3>
           <div id="activeTasksList"><div class="spinner"></div></div>
+        </div>
+        <div class="card">
+          <h3>🔍 مراجعة إثباتات الإنجاز</h3>
+          <div id="taskReviewList"><div class="spinner"></div></div>
         </div>
         <div class="card">
           <h3>📋 السجل الكامل (بدون تعديل)</h3>
@@ -511,6 +519,7 @@ async function attemptLogin(pin){
 
 /* ---------------- EMPLOYEE SCREEN ---------------- */
 let empClockInterval = null;
+let empTasksInterval = null;
 async function enterEmployee(emp){
   $("#screen-login").classList.add("hidden");
   $("#screen-admin").classList.add("hidden");
@@ -522,6 +531,8 @@ async function enterEmployee(emp){
   updateClock();
   if(empClockInterval) clearInterval(empClockInterval);
   empClockInterval = setInterval(updateClock, 1000*20);
+  if(empTasksInterval) clearInterval(empTasksInterval);
+  empTasksInterval = setInterval(renderMyTasks, 1000*30); // keeps the countdown banner fresh
 
   await refreshEmployeeStatus();
   locateAndPrepare();
@@ -830,6 +841,7 @@ function taskDueDate(task){ return new Date(task.date+"T"+task.dueTime); }
 function taskStatus(task, now){
   now = now || new Date();
   const due = taskDueDate(task);
+  if(task.rejectedByAdmin) return "missed";
   if(task.completed){
     return task.completedOnTime ? "done" : "missed";
   }
@@ -858,7 +870,7 @@ async function computeTasksNet(emp, startDate, endDate){
   return { net, items };
 }
 
-/* ---- Employee-side: today's tasks ---- */
+/* ---- Employee-side: today's tasks + banners ---- */
 async function renderMyTasks(){
   const card = $("#empTasksCard");
   const wrap = $("#empTasksList");
@@ -866,26 +878,125 @@ async function renderMyTasks(){
     const todayStr = dateStr(new Date());
     const snap = await getDocs(query(collection(db,COL_TASK), where("employeeId","==",currentEmployee.id), where("date","==",todayStr)));
     const tasks = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    renderTaskBanners(tasks);
     if(tasks.length===0){ card.style.display="none"; return; }
     card.style.display="block";
     const now = new Date();
     wrap.innerHTML = tasks.sort((a,b)=> a.dueTime.localeCompare(b.dueTime)).map(t=>{
       const status = taskStatus(t, now);
       const pill = status==="done" ? `<span class="pill pill-green">✓ أُنجزت</span>` : status==="missed" ? `<span class="pill pill-red">فات الوقت</span>` : `<span class="pill pill-gold">حتى ${t.dueTime}</span>`;
-      const canComplete = !t.completed;
+      let actionHtml;
+      if(t.completed){
+        if(t.rejectedByAdmin){
+          actionHtml = `<div class="muted" style="font-size:12px;color:var(--red);">⚠️ رفضت الإدارة إثبات هذه المهمة</div>`;
+        } else {
+          actionHtml = `<div class="muted" style="font-size:12px;color:var(--green);">✓ تم إرسال الإثبات، بانتظار مراجعة الإدارة</div>`;
+        }
+      } else if(status==="missed"){
+        actionHtml = `<button class="btn" style="width:100%;background:var(--line);color:var(--muted);" disabled>انتهى الوقت</button>
+          <div class="muted" style="font-size:12px;color:var(--red);margin-top:6px;">❌ لم يتم الإنجاز — تم استقطاع ${money(t.penaltyAmount||0)} د.ع</div>`;
+      } else {
+        actionHtml = `<button class="btn btn-primary btn-sm" style="width:100%;" data-complete-task="${t.id}">✅ تم الإنجاز</button>`;
+      }
       return `<div class="card" style="margin-bottom:10px;padding:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
           <b>${t.title}</b> ${pill}
         </div>
         <div class="muted" style="font-size:12px;margin-bottom:8px;">مكافأة الإنجاز: ${money(t.rewardAmount||0)} د.ع · استقطاع التأخر: ${money(t.penaltyAmount||0)} د.ع</div>
-        ${canComplete ? `<button class="btn btn-primary btn-sm" style="width:100%;" data-complete-task="${t.id}">✅ تم الإنجاز</button>` : ""}
+        ${actionHtml}
       </div>`;
     }).join("");
-    $all("[data-complete-task]").forEach(b=> b.addEventListener("click", ()=> completeTask(b.dataset.completeTask)));
+    $all("[data-complete-task]").forEach(b=> b.addEventListener("click", ()=> openTaskProofModal(b.dataset.completeTask)));
   }catch(e){
     console.error("renderMyTasks failed", e);
     card.style.display="none";
   }
+}
+function renderTaskBanners(tasks){
+  const now = new Date();
+  const pending = tasks.filter(t=> !t.completed && taskStatus(t,now)==="pending");
+  const bannerHost = $("#empTaskBanners");
+  if(!bannerHost) return;
+  let html = "";
+  const notDone = tasks.filter(t=> !t.completed);
+  if(notDone.length>0){
+    html += `<div class="card" style="background:var(--gold-tint);border-color:var(--gold);margin-bottom:10px;">
+      <b>📝 لديك ${notDone.length} مهام يومية لم تُنجز بعد</b>
+    </div>`;
+  }
+  const soon = pending.filter(t=>{
+    const due = taskDueDate(t);
+    const diffMin = (due - now)/60000;
+    return diffMin>0 && diffMin<=15;
+  });
+  soon.forEach(t=>{
+    const diffMin = Math.ceil((taskDueDate(t) - now)/60000);
+    html += `<div class="card" style="background:var(--red-tint);border-color:var(--red);margin-bottom:10px;">
+      <b style="color:var(--red);">⚠️ متبقي ${diffMin} دقيقة لإنجاز "${t.title}".. أسرع قبل الخصم</b>
+    </div>`;
+  });
+  bannerHost.innerHTML = html;
+}
+
+/* ---- Proof-of-completion modal (photo + note) ---- */
+function readImageFileCompressed(file, maxWidth){
+  maxWidth = maxWidth || 400;
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const scale = maxWidth / img.width;
+        const canvas = document.createElement("canvas");
+        canvas.width = maxWidth;
+        canvas.height = Math.round(img.height * (scale<1?scale:1));
+        const w = scale<1 ? maxWidth : img.width;
+        const h = scale<1 ? canvas.height : img.height;
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", 0.6));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+let proofPhotoData = null;
+function openTaskProofModal(taskId){
+  proofPhotoData = null;
+  const modal = `
+  <div class="modal-bg" id="proofModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>إثبات إنجاز المهمة</h3>
+      <div class="center" id="proofPreviewWrap" style="margin-bottom:12px;"></div>
+      <div class="row" style="margin-bottom:12px;">
+        <button class="btn btn-outline" id="btnProofCamera">📷 التقط صورة</button>
+        <button class="btn btn-outline" id="btnProofGallery">🖼️ من المعرض</button>
+      </div>
+      <input type="file" accept="image/*" capture="environment" id="proofCameraInput" class="hidden">
+      <input type="file" accept="image/*" id="proofGalleryInput" class="hidden">
+      <div class="field"><label>ملاحظة (اختياري)</label><input id="mProofNote" placeholder="مثال: خلصت الطلبية وسلمتها"></div>
+      <button class="btn btn-primary" id="btnConfirmProof">تأكيد الإنجاز</button>
+      <button class="link-btn" id="btnCancelProof" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCancelProof").addEventListener("click", closeModal);
+  $("#btnProofCamera").addEventListener("click", ()=> $("#proofCameraInput").click());
+  $("#btnProofGallery").addEventListener("click", ()=> $("#proofGalleryInput").click());
+  const handleFile = async (file)=>{
+    if(!file) return;
+    showToast("جارِ تجهيز الصورة...");
+    proofPhotoData = await readImageFileCompressed(file);
+    $("#proofPreviewWrap").innerHTML = `<img src="${proofPhotoData}" style="max-width:100%;border-radius:12px;">`;
+  };
+  $("#proofCameraInput").addEventListener("change", e=> handleFile(e.target.files[0]));
+  $("#proofGalleryInput").addEventListener("change", e=> handleFile(e.target.files[0]));
+  $("#btnConfirmProof").addEventListener("click", ()=> completeTask(taskId));
 }
 async function completeTask(taskId){
   const snap = await getDoc(doc(db, COL_TASK, taskId));
@@ -893,11 +1004,49 @@ async function completeTask(taskId){
   const now = new Date();
   const due = taskDueDate(t);
   const onTime = now <= due;
-  await updateDoc(doc(db, COL_TASK, taskId), { completed:true, completedOnTime:onTime, completedAt: serverTimestamp() });
+  const note = $("#mProofNote") ? $("#mProofNote").value.trim() : "";
+  await updateDoc(doc(db, COL_TASK, taskId), {
+    completed:true, completedOnTime:onTime, completedAt: serverTimestamp(),
+    proofPhoto: proofPhotoData || null, proofNote: note || null,
+    rejectedByAdmin: false
+  });
+  closeModal();
+  proofPhotoData = null;
   showToast(onTime ? "أحسنت! تمت إضافة المكافأة ✅" : "انجزتها بعد الوقت المحدد — تم تسجيل الاستقطاع");
   renderMyTasks();
   renderEmployeeWeekSummary();
 }
+
+/* ---- Employee's own full task log ---- */
+async function openMyTasksLogModal(){
+  const modal = `
+  <div class="modal-bg" id="myTasksLogModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>سجل مهامي</h3>
+      <div id="myTasksLogList"><div class="spinner"></div></div>
+      <button class="link-btn" id="btnCloseMyTasksLog" style="width:100%;margin-top:12px;">إغلاق</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  $("#btnCloseMyTasksLog").addEventListener("click", closeModal);
+  const wrap = $("#myTasksLogList");
+  try{
+    const snap = await getDocs(query(collection(db,COL_TASK), where("employeeId","==",currentEmployee.id)));
+    const list = snap.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=> (b.date+b.dueTime).localeCompare(a.date+a.dueTime));
+    if(list.length===0){ wrap.innerHTML = `<div class="muted" style="font-size:13px;">لا توجد مهام مسجّلة بعد</div>`; return; }
+    const now = new Date();
+    wrap.innerHTML = list.map(t=>{
+      const status = taskStatus(t, now);
+      const pill = status==="done" ? `<span class="pill pill-green">✓ أُنجزت</span>` : status==="missed" ? `<span class="pill pill-red">فاتها الوقت</span>` : `<span class="pill pill-gold">قيد الانتظار</span>`;
+      return `<div class="employee-row"><span>${t.date} — ${t.title}</span>${pill}</div>`;
+    }).join("");
+  }catch(e){
+    console.error("openMyTasksLogModal failed", e);
+    wrap.innerHTML = `<div class="muted">تعذّر التحميل</div>`;
+  }
+}
+
 
 /* ---- Admin-side: manage tasks ---- */
 function openTaskModal(taskId){
@@ -966,11 +1115,48 @@ async function saveTask(taskId){
   closeModal();
   renderTasksTab();
 }
+function openTaskRedoModal(taskId){
+  const modal = `
+  <div class="modal-bg" id="taskRedoModalBg">
+    <div class="modal">
+      <div class="modal-handle"></div>
+      <h3>إعادة المهمة</h3>
+      <p class="muted" style="font-size:12px;">حدد موعد جديد للمهمة — راح ترجع "قيد الانتظار" بدون أي مكافأة أو استقطاع سابق.</p>
+      <div class="row">
+        <div class="field"><label>التاريخ</label><input id="mRedoDate" type="date"></div>
+        <div class="field"><label>الوقت المستحق</label><input id="mRedoTime" type="time"></div>
+      </div>
+      <button class="btn btn-primary" id="btnSaveRedo">حفظ وإعادة</button>
+      <button class="link-btn" id="btnCancelRedo" style="width:100%;margin-top:12px;">إلغاء</button>
+    </div>
+  </div>`;
+  $("#modalRoot").innerHTML = modal;
+  getDoc(doc(db,COL_TASK,taskId)).then(snap=>{
+    const t = snap.data();
+    $("#mRedoDate").value = t.date;
+    $("#mRedoTime").value = t.dueTime;
+  });
+  $("#btnCancelRedo").addEventListener("click", closeModal);
+  $("#btnSaveRedo").addEventListener("click", async ()=>{
+    const date = $("#mRedoDate").value, dueTime = $("#mRedoTime").value;
+    if(!date || !dueTime){ showToast("حدد التاريخ والوقت"); return; }
+    await updateDoc(doc(db,COL_TASK,taskId), {
+      date, dueTime, completed:false, completedOnTime:false,
+      proofPhoto:null, proofNote:null, rejectedByAdmin:false
+    });
+    closeModal();
+    showToast("تمت إعادة المهمة بموعد جديد");
+    renderTasksTab();
+    renderPayrollBalances();
+  });
+}
 async function renderTasksTab(){
   const activeWrap = $("#activeTasksList");
   const logWrap = $("#taskLogList");
+  const reviewWrap = $("#taskReviewList");
   activeWrap.innerHTML = `<div class="spinner"></div>`;
   logWrap.innerHTML = `<div class="spinner"></div>`;
+  if(reviewWrap) reviewWrap.innerHTML = `<div class="spinner"></div>`;
   try{
     const snap = await getDocs(collection(db, COL_TASK));
     const all = snap.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=> (b.date+b.dueTime).localeCompare(a.date+a.dueTime));
@@ -978,13 +1164,14 @@ async function renderTasksTab(){
 
     if(all.length===0){
       activeWrap.innerHTML = `<div class="empty-state">لا توجد مهام مضافة بعد</div>`;
+      if(reviewWrap) reviewWrap.innerHTML = `<div class="empty-state">لا توجد إثباتات بانتظار المراجعة</div>`;
       logWrap.innerHTML = `<div class="empty-state">لا يوجد سجل بعد</div>`;
       return;
     }
 
     const statusPill = s=> s==="done" ? `<span class="pill pill-green">✓ أُنجزت بالوقت</span>` : s==="missed" ? `<span class="pill pill-red">فاتها الوقت</span>` : `<span class="pill pill-gold">قيد الانتظار</span>`;
 
-    // Active = not yet completed and not yet judged missed permanently — show everything not completed, plus recently completed, with edit tools
+    // Active = not yet completed — editable
     const active = all.filter(t=> !t.completed);
     activeWrap.innerHTML = active.length===0 ? `<div class="muted" style="font-size:13px;">لا توجد مهام نشطة</div>` : active.map(t=>{
       const status = taskStatus(t, now);
@@ -1000,6 +1187,34 @@ async function renderTasksTab(){
       </div>`;
     }).join("");
     $all("[data-edit-task]").forEach(b=> b.addEventListener("click", ()=> openTaskModal(b.dataset.editTask)));
+
+    // Proof review = completed tasks (not yet rejected) — show photo/note + reject/redo
+    if(reviewWrap){
+      const needsReview = all.filter(t=> t.completed && !t.rejectedByAdmin);
+      reviewWrap.innerHTML = needsReview.length===0 ? `<div class="muted" style="font-size:13px;">لا توجد إثباتات جديدة</div>` : needsReview.map(t=>{
+        const status = taskStatus(t, now);
+        const photoHtml = t.proofPhoto ? `<img src="${t.proofPhoto}" style="width:100%;max-width:220px;border-radius:10px;margin:8px 0;cursor:pointer;" data-view-task-photo="${t.proofPhoto}">` : `<div class="muted" style="font-size:12px;">بدون صورة إثبات</div>`;
+        return `<div class="card" style="margin-bottom:10px;padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <b>${t.employeeName} — ${t.title}</b> ${statusPill(status)}
+          </div>
+          ${photoHtml}
+          ${t.proofNote?`<div class="muted" style="font-size:12px;margin-bottom:8px;">📝 ${t.proofNote}</div>`:""}
+          <div class="row">
+            <button class="btn btn-red btn-sm" data-reject-task="${t.id}">🚫 رفض (كذب)</button>
+            <button class="btn btn-gold btn-sm" data-redo-task="${t.id}">🔄 إعادة المهمة</button>
+          </div>
+        </div>`;
+      }).join("");
+      $all("[data-view-task-photo]").forEach(img=> img.addEventListener("click", ()=> viewPhotoFull(img.dataset.viewTaskPhoto)));
+      $all("[data-reject-task]").forEach(b=> b.addEventListener("click", async ()=>{
+        if(!confirm("رفض إثبات هذه المهمة؟ راح تتحول لغير منجزة ويطبّق الاستقطاع.")) return;
+        await updateDoc(doc(db,COL_TASK,b.dataset.rejectTask), { rejectedByAdmin:true });
+        showToast("تم الرفض، تحوّلت المهمة لغير منجزة");
+        renderTasksTab(); renderPayrollBalances();
+      }));
+      $all("[data-redo-task]").forEach(b=> b.addEventListener("click", ()=> openTaskRedoModal(b.dataset.redoTask)));
+    }
 
     // Full read-only log = everything, no edit tools
     logWrap.innerHTML = `<table>
@@ -2282,9 +2497,11 @@ $("#btnBackspace").addEventListener("click", ()=>{ pinBuffer = pinBuffer.slice(0
 
 $("#btnCheckAction").addEventListener("click", handleCheckAction);
 $("#btnRequestLeave").addEventListener("click", openLeaveRequestModal);
+$("#btnMyTasksLog").addEventListener("click", openMyTasksLogModal);
 $("#btnEmpLogout").addEventListener("click", ()=>{
   currentEmployee = null;
   if(empClockInterval) clearInterval(empClockInterval);
+  if(empTasksInterval) clearInterval(empTasksInterval);
   if(spotCheckUnsub){ spotCheckUnsub(); spotCheckUnsub = null; }
   $("#screen-employee").classList.add("hidden");
   $("#screen-login").classList.remove("hidden");
